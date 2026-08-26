@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+build/
+.env
+.env.local
+
+# Findings output (generated at runtime, keep folders via .gitkeep).
+# ** so this also covers findings/scan-inputs/*.json - a real run's raw
+# scanner reports can contain a real AWS account ID and resource names.
+findings/**/*.json
+!findings/.gitkeep
+!findings/scan-inputs/.gitkeep
+
+# Vendored demo scan target (OWASP Juice Shop, ~95MB) - fetched on demand by
+# scripts/fetch-demo-target.sh rather than committed, so the repo stays small
+# and focused on ThreatWeave's own code.
+/demo-app/
+
+# AWS credentials — NEVER commit
+.aws/
+*.pem
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Model artifacts
+*.pkl
+*.joblib
+# ...except the trained Random Forest, which must ship with the project.
+# Nothing in the install path retrains it, and P_RF is 45% of the risk score,
+# so a clone without this file silently falls back to a CVSS heuristic.
+!aiops_engine/ml/model/rf_model.joblib

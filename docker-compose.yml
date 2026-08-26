@@ -1,0 +1,134 @@
+# ThreatWeave - full stack.
+#
+#   docker compose up -d                    Jenkins + dashboard
+#   docker compose --profile sast up -d     also start SonarQube (needs ~3GB RAM)
+#   docker compose --profile demo up -d     also run the Juice Shop demo target
+#
+# The project directory is mounted into Jenkins at /workspace so the pipeline
+# runs against this checkout, and the findings directory is shared with the
+# dashboard API so results appear without any copying.
+
+name: threatweave
+
+services:
+
+  jenkins:
+    build:
+      context: ./jenkins
+    container_name: threatweave-jenkins
+    restart: unless-stopped
+    ports:
+      - "8080:8080"      # web UI
+      - "50000:50000"    # inbound agents
+    # The mounted Docker socket is owned by root:root, so the jenkins user
+    # needs group 0 to reach it. Socket access is root-equivalent by nature -
+    # this instance is single-tenant and runs only the pipeline in this repo.
+    group_add:
+      - "0"
+    environment:
+      JENKINS_ADMIN_ID: ${JENKINS_ADMIN_ID:-admin}
+      JENKINS_ADMIN_PASSWORD: ${JENKINS_ADMIN_PASSWORD:-admin}
+      # Absolute host path of this directory. Scanners run as sibling
+      # containers, so their volume mounts are resolved by the host daemon and
+      # must use host paths rather than the container's /workspace.
+      HOST_WORKSPACE: ${HOST_WORKSPACE:?set HOST_WORKSPACE in .env}
+      # Host path of the scanned project, mounted below at /target. The
+      # pipeline needs the host-side value for the same sibling-container
+      # reason as HOST_WORKSPACE. Empty or relative means the demo target.
+      TARGET_PATH: ${TARGET_PATH:-}
+      # Set these to enable the SAST stage.
+      SONAR_HOST_URL: ${SONAR_HOST_URL:-}
+      SONAR_TOKEN: ${SONAR_TOKEN:-}
+      # Compose network the sonar-scanner sibling container joins so it can
+      # resolve the `sonarqube` service by name. Matches `name: threatweave`
+      # above; override only if the project is renamed.
+      SONAR_NETWORK: ${SONAR_NETWORK:-threatweave_default}
+    volumes:
+      - jenkins-home:/var/jenkins_home
+      - ./jenkins/casc.yaml:/var/jenkins_home/casc.yaml:ro
+      # readFileFromWorkspace in the CasC job definition resolves against
+      # JENKINS_HOME, so the pipeline definition is mounted there too.
+      - ./Jenkinsfile:/var/jenkins_home/Jenkinsfile:ro
+      # The pipeline builds images and runs scanners as containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # This project, so the pipeline can reach the engine and write findings.
+      - .:/workspace
+      # The project under test. Defaults to the bundled demo target so a fresh
+      # install works before the user has chosen one. Read-only: ThreatWeave
+      # scans and advises, it never modifies the code it is given.
+      - ${TARGET_PATH:-./demo-app}:/target:ro
+      # Read-only AWS credentials for the cloud monitor.
+      - ${HOME}/.aws:/var/jenkins_home/.aws:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/login"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+
+  api:
+    build:
+      context: ./dashboard/backend
+    container_name: threatweave-api
+    restart: unless-stopped
+    ports:
+      # Host port only - the dashboard reaches the API as api:4000 on the
+      # compose network, so this publish exists for direct API access and can
+      # move if something else on the host already owns 4000.
+      - "${API_PORT:-4000}:4000"
+    environment:
+      PORT: 4000
+      FINDINGS_DIR: /data/findings
+      AIOPS_OUTPUT: /data/findings/aiops-output.json
+      HISTORY_FILE: /data/findings/history.json
+      ENGINE_DIR: /data/aiops_engine
+      SUPPRESSION_RULES: /data/aiops_engine/suppression_rules.json
+      AWS_MONITOR: /data/aws_monitor/monitor.py
+      PYTHON_BIN: python3
+    volumes:
+      - .:/data
+      - ${HOME}/.aws:/root/.aws:ro
+
+  dashboard:
+    build:
+      context: ./dashboard/frontend
+      args:
+        # Same-origin /api is proxied to the API service by nginx.
+        VITE_API_TARGET: http://api:4000
+    container_name: threatweave-dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+
+  # ---- optional: SonarQube for the SAST stage -------------------------
+  sonarqube:
+    image: sonarqube:community
+    container_name: threatweave-sonarqube
+    profiles: ["sast"]
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    environment:
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+    volumes:
+      - sonarqube-data:/opt/sonarqube/data
+      - sonarqube-logs:/opt/sonarqube/logs
+      - sonarqube-extensions:/opt/sonarqube/extensions
+
+  # ---- optional: the vulnerable demo target ---------------------------
+  juice-shop:
+    image: bkimminich/juice-shop:latest
+    container_name: threatweave-juice-shop
+    profiles: ["demo"]
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+
+volumes:
+  jenkins-home:
+  sonarqube-data:
+  sonarqube-logs:
+  sonarqube-extensions:
+  trivy-cache:

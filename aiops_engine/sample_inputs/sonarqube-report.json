@@ -1,0 +1,35 @@
+{
+  "issues": [
+    {
+      "key": "AY1a-sonar-001",
+      "rule": "java:S2076",
+      "severity": "BLOCKER",
+      "type": "VULNERABILITY",
+      "component": "juice-shop:backend/src/routes/search.js",
+      "line": 42,
+      "message": "SQL query is built from user input without sanitisation (SQL injection).",
+      "cwe": ["CWE-89"]
+    },
+    {
+      "key": "AY1a-sonar-002",
+      "rule": "java:S5852",
+      "severity": "CRITICAL",
+      "type": "VULNERABILITY",
+      "component": "juice-shop:backend/pom.xml",
+      "line": 88,
+      "message": "Dependency log4j-core 2.14.1 is affected by CVE-2021-44228.",
+      "cwe": ["CWE-502"],
+      "cve": "CVE-2021-44228"
+    },
+    {
+      "key": "AY1a-sonar-003",
+      "rule": "javascript:S5122",
+      "severity": "MAJOR",
+      "type": "VULNERABILITY",
+      "component": "juice-shop:backend/src/app.js",
+      "line": 17,
+      "message": "CORS policy allows any origin (Access-Control-Allow-Origin: *).",
+      "cwe": ["CWE-942"]
+    }
+  ]
+}

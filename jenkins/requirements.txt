@@ -1,0 +1,7 @@
+# Python dependencies for the AIOps engine, installed into the Jenkins image
+# so the pipeline can run the engine without a separate container.
+scikit-learn>=1.5
+rank-bm25>=0.2.2
+boto3>=1.34
+joblib>=1.4
+numpy>=1.26

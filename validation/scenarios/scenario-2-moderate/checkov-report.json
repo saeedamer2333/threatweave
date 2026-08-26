@@ -1,0 +1,101 @@
+{
+  "check_type": "terraform",
+  "results": {
+    "failed_checks": [
+      {
+        "check_id": "CKV_AWS_24",
+        "bc_check_id": "BC_AWS_NETWORKING_1",
+        "check_name": "Ensure no security groups allow ingress from 0.0.0.0:0 to port 22",
+        "check_result": {
+          "result": "FAILED",
+          "evaluated_keys": [
+            "ingress/[1]/from_port",
+            "ingress/[1]/to_port",
+            "ingress/[1]/cidr_blocks",
+            "ingress/[1]/ipv6_cidr_blocks"
+          ]
+        },
+        "code_block": null,
+        "file_path": "/main.tf",
+        "file_abs_path": "/tf/main.tf",
+        "repo_file_path": "/tf/main.tf",
+        "file_line_range": [
+          34,
+          68
+        ],
+        "resource": "aws_security_group.juice_shop",
+        "evaluations": null,
+        "check_class": "checkov.terraform.checks.resource.aws.SecurityGroupUnrestrictedIngress22",
+        "fixed_definition": null,
+        "entity_tags": {
+          "Name": "threatweave-juice-shop",
+          "Purpose": "demo-target"
+        },
+        "caller_file_path": null,
+        "caller_file_line_range": null,
+        "resource_address": null,
+        "severity": null,
+        "bc_category": null,
+        "benchmarks": null,
+        "description": null,
+        "short_description": null,
+        "vulnerability_details": null,
+        "connected_node": null,
+        "guideline": "https://docs.prismacloud.io/en/enterprise-edition/policy-reference/aws-policies/aws-networking-policies/networking-1-port-security",
+        "details": [],
+        "check_len": null,
+        "definition_context_file_path": "/tf/main.tf"
+      },
+      {
+        "check_id": "CKV_AWS_23",
+        "bc_check_id": "BC_AWS_NETWORKING_31",
+        "check_name": "Ensure every security group and rule has a description",
+        "check_result": {
+          "result": "FAILED",
+          "evaluated_keys": [
+            "description",
+            "egress/[0]"
+          ]
+        },
+        "code_block": null,
+        "file_path": "/main.tf",
+        "file_abs_path": "/tf/main.tf",
+        "repo_file_path": "/tf/main.tf",
+        "file_line_range": [
+          34,
+          68
+        ],
+        "resource": "aws_security_group.juice_shop",
+        "evaluations": null,
+        "check_class": "checkov.terraform.checks.resource.aws.SecurityGroupRuleDescription",
+        "fixed_definition": null,
+        "entity_tags": {
+          "Name": "threatweave-juice-shop",
+          "Purpose": "demo-target"
+        },
+        "caller_file_path": null,
+        "caller_file_line_range": null,
+        "resource_address": null,
+        "severity": null,
+        "bc_category": null,
+        "benchmarks": null,
+        "description": null,
+        "short_description": null,
+        "vulnerability_details": null,
+        "connected_node": null,
+        "guideline": "https://docs.prismacloud.io/en/enterprise-edition/policy-reference/aws-policies/aws-networking-policies/networking-31",
+        "details": [],
+        "check_len": null,
+        "definition_context_file_path": "/tf/main.tf"
+      }
+    ]
+  },
+  "summary": {
+    "passed": 15,
+    "failed": 25,
+    "skipped": 0,
+    "parsing_errors": 0,
+    "resource_count": 5,
+    "checkov_version": "3.3.9"
+  }
+}

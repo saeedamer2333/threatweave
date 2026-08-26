@@ -1,0 +1,58 @@
+# Jenkins Configuration as Code.
+#
+# Defines the security realm and the ThreatWeave pipeline job so a fresh
+# container comes up ready to run - no setup wizard, no manual job creation.
+jenkins:
+  systemMessage: "ThreatWeave - AIOps security pipeline"
+  numExecutors: 2
+  mode: NORMAL
+
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "${JENKINS_ADMIN_ID:-admin}"
+          password: "${JENKINS_ADMIN_PASSWORD:-admin}"
+
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+unclassified:
+  location:
+    url: "http://localhost:8080/"
+
+jobs:
+  - script: |
+      pipelineJob('threatweave-pipeline') {
+        description('''DevSecOps pipeline: scans the demo target with SonarQube,
+                       GitLeaks, Trivy and Checkov, then runs the AIOps engine
+                       to deduplicate, score and correlate the findings.''')
+        parameters {
+          stringParam('TARGET_IMAGE', 'bkimminich/juice-shop:latest',
+                      'Container image to scan with Trivy')
+          stringParam('SOURCE_DIR', '/target/juice-shop',
+                      '''Source tree to scan with GitLeaks and SonarQube.
+                         Paths under /target resolve to TARGET_PATH from .env;
+                         paths under /workspace resolve to ThreatWeave itself.''')
+          stringParam('IAC_DIR', '/workspace/infra',
+                      '''Infrastructure-as-code directory for Checkov. Defaults to
+                         ThreatWeave's own demo Terraform; point it at your own
+                         project (e.g. /target/infra) when scanning one.''')
+          stringParam('SONAR_PROJECT_KEY', 'threatweave-demo',
+                      'SonarQube project key for the SAST stage')
+          booleanParam('RUN_AWS_MONITOR', true,
+                       'Include live AWS cloud governance checks')
+          booleanParam('FAIL_ON_CRITICAL', false,
+                       'Fail the build when the health score is critical')
+        }
+        definition {
+          cps {
+            // readFileFromWorkspace cannot be used here: CasC runs job scripts
+            // during startup, before any workspace exists. The Jenkinsfile is
+            // mounted into JENKINS_HOME by compose and read directly instead.
+            script(new File('/var/jenkins_home/Jenkinsfile').text)
+            sandbox(false)
+          }
+        }
+      }

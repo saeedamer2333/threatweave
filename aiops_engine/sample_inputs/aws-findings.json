@@ -1,0 +1,35 @@
+{
+  "scanned_at": "2026-08-03T16:55:23Z",
+  "account": "194722404383",
+  "region": "ap-southeast-1",
+  "status": "ok",
+  "checks_run": [
+    "ec2",
+    "sg",
+    "s3",
+    "iam"
+  ],
+  "findings": [
+    {
+      "check": "iam_admin_policy",
+      "resource": "role/aws-lambda-fully0funiction",
+      "severity": "HIGH",
+      "detail": "IAM role has the AdministratorAccess policy attached.",
+      "internet_facing": false
+    },
+    {
+      "check": "iam_admin_policy",
+      "resource": "user/Cli-Access",
+      "severity": "HIGH",
+      "detail": "IAM user has the AdministratorAccess policy attached directly.",
+      "internet_facing": false
+    },
+    {
+      "check": "iam_multiple_access_keys",
+      "resource": "user/Cli-Access",
+      "severity": "MEDIUM",
+      "detail": "IAM user has 2 active access keys; unused keys widen the attack surface.",
+      "internet_facing": false
+    }
+  ]
+}

@@ -1,0 +1,1855 @@
+{
+  "run_id": "run-2026-08-09-001",
+  "generated_at": "2026-08-09T05:35:30Z",
+  "health_score": 23,
+  "summary": {
+    "raw_findings": 541,
+    "after_dedup": 57,
+    "reduction_pct": 89.5,
+    "clusters": 1,
+    "critical": 7,
+    "high": 38,
+    "medium": 8,
+    "low": 4,
+    "suppressed": 93
+  },
+  "suppressions": [
+    {
+      "id": "sup-acb6de8b",
+      "reason": "Test fixtures and mock data, not real credentials",
+      "created_by": "security-analyst",
+      "created_at": "2026-08-03T18:40:03Z",
+      "suppressed_count": 93
+    }
+  ],
+  "clusters": [
+    {
+      "cluster_id": "cluster-1",
+      "title": "Internet-exposed asset running 22 severe vulnerabilities",
+      "risk_score": 62,
+      "attack_path": "Vulnerable dependency in deployed container (Trivy) -> exposure declared in infrastructure code (Checkov)",
+      "finding_ids": [
+        "f-5fa611af",
+        "f-fd8b54c6",
+        "f-d7ec8f75",
+        "f-1f9a8641",
+        "f-fd2bd20f",
+        "f-1b8de102",
+        "f-ce3dc0be",
+        "f-bb0538e0",
+        "f-bd259bf6"
+      ],
+      "cve_id": null,
+      "internet_exposed": true,
+      "exposure_source": "checkov",
+      "exposure_resource": "aws_instance.juice_shop (/main.tf:73)",
+      "severe_count": 22,
+      "total_cves": 67,
+      "rule": "B: exposed vulnerable asset",
+      "explanation": {
+        "why_it_matters": "aws_instance.juice_shop (/main.tf:73) is reachable from the public internet and the software behind it carries 22 severe vulnerabilities covering 67 CVEs in total. The exposure is declared in the infrastructure code, so it will exist once this configuration is applied. Individually these are routine tickets in separate tools; together they form a single reachable attack surface, which is why this is ranked above any of its parts.",
+        "what_is_at_risk": "An attacker needs no foothold to begin - the vulnerable service is directly reachable. Successful exploitation could mean remote code execution on a production-facing host, and from there access to data and credentials.",
+        "recommended_action": "Close the exposure first: restrict ingress on aws_instance.juice_shop (/main.tf:73) to trusted CIDR ranges. That single change removes the reachability for all 22 findings at once. Then upgrade the affected packages, starting with None."
+      }
+    }
+  ],
+  "findings": [
+    {
+      "source": "sonarqube",
+      "type": "VULNERABILITY",
+      "severity": "CRITICAL",
+      "title": "SQL query is built from user input without sanitisation (SQL injection).",
+      "affected_resource": "juice-shop:backend/src/routes/search.js:42",
+      "description": "",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "java:S2076",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "sonarqube"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-fd8b54c6",
+      "risk_score": 62,
+      "scores": {
+        "P_RF": 0.69,
+        "S_retrieval": 0.75,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Moderate",
+      "cluster_id": "cluster-1",
+      "explanation": "At juice-shop:backend/src/routes/search.js:42, user input reaches a database query without sanitisation, allowing SQL injection. Use parameterised queries or an ORM so input can never alter query structure."
+    },
+    {
+      "source": "checkov",
+      "type": "MISCONFIGURATION",
+      "severity": "HIGH",
+      "title": "CKV_AWS_135: Ensure that EC2 is EBS optimized",
+      "affected_resource": "aws_instance.juice_shop (/main.tf:73)",
+      "description": "https://docs.prismacloud.io/en/enterprise-edition/policy-reference/aws-policies/aws-general-policies/ensure-that-ec2-is-ebs-optimized",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "CKV_AWS_135",
+      "environment": "production",
+      "internet_facing": true,
+      "reported_by": [
+        "checkov"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-5fa611af",
+      "risk_score": 61,
+      "scores": {
+        "P_RF": 0.55,
+        "S_retrieval": 0.65,
+        "S_asset": 1.0,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": "cluster-1",
+      "explanation": "CKV_AWS_135: Ensure that EC2 is EBS optimized (aws_instance.juice_shop (/main.tf:73)) leaves the resource open to the whole internet. Restrict ingress to known CIDR ranges."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "CRITICAL",
+      "title": "5 vulnerabilities in lodash (most severe: CVE-2019-10744)",
+      "affected_resource": "Node.js / lodash-2.4.2",
+      "description": "Versions of lodash lower than 4.17.12 are vulnerable to Prototype Pollution. The function defaultsDeep could be tricked into adding or modifying properties of Object.prototype using a constructor payload.",
+      "cve_id": "CVE-2019-10744",
+      "cvss_score": 9.1,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2019-10744",
+        "CVE-2021-23337",
+        "CVE-2018-16487",
+        "CVE-2026-2950",
+        "CVE-2018-3721"
+      ],
+      "merged_count": 5,
+      "fix_version": null,
+      "id": "f-d7ec8f75",
+      "risk_score": 60,
+      "scores": {
+        "P_RF": 0.62,
+        "S_retrieval": 0.77,
+        "S_asset": 0.6,
+        "S_EPSS": 0.05
+      },
+      "confidence": "Moderate",
+      "cluster_id": "cluster-1",
+      "explanation": "5 vulnerabilities affect Node.js / lodash-2.4.2; the most severe is CVE-2019-10744 (CVSS 9.1), a critical issue. A single upgrade of this package clears all 5, so treat it as one action rather than 5 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "CRITICAL",
+      "title": "Command Injection in marsdb",
+      "affected_resource": "Node.js / marsdb-0.6.11",
+      "description": "All versions of `marsdb` are vulnerable to Command Injection. In the `DocumentMatcher` class, selectors on `$where` clauses are passed to a Function constructor unsanitized. This allows attackers to run arbitrary commands in the system when the function is executed.\n\n\n## Recommendation\n\nNo fix is currently available. Consider using an alternative package until a fix is made available.",
+      "cve_id": "GHSA-5mrr-rgp6-x4gr",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-1f9a8641",
+      "risk_score": 59,
+      "scores": {
+        "P_RF": 0.69,
+        "S_retrieval": 0.63,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Moderate",
+      "cluster_id": "cluster-1",
+      "explanation": "GHSA-5mrr-rgp6-x4gr is a critical vulnerability affecting Node.js / marsdb-0.6.11. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "checkov",
+      "type": "MISCONFIGURATION",
+      "severity": "HIGH",
+      "title": "CKV_AWS_24: Ensure no security groups allow ingress from 0.0.0.0:0 to port 22",
+      "affected_resource": "aws_security_group.juice_shop (/main.tf:34)",
+      "description": "https://docs.prismacloud.io/en/enterprise-edition/policy-reference/aws-policies/aws-networking-policies/networking-1-port-security",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "CKV_AWS_24",
+      "environment": "production",
+      "internet_facing": true,
+      "reported_by": [
+        "checkov"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-690857bd",
+      "risk_score": 58,
+      "scores": {
+        "P_RF": 0.43,
+        "S_retrieval": 0.74,
+        "S_asset": 1.0,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CKV_AWS_24: Ensure no security groups allow ingress from 0.0.0.0:0 to port 22 (aws_security_group.juice_shop (/main.tf:34)) leaves the resource open to the whole internet. Restrict ingress to known CIDR ranges."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "11 vulnerabilities in libc6 (most severe: CVE-2026-5435)",
+      "affected_resource": "bkimminich/juice-shop:latest (debian 13.5) / libc6-2.41-12+deb13u3",
+      "description": "The deprecated functions ns_printrrf, ns_printrr and fp_nquery in the GNU C Library version 2.2 and newer fail to enforce the caller-supplied buffer length, and can result in an out-of-bounds write when printing TSIG records.",
+      "cve_id": "CVE-2026-5435",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2026-5435",
+        "CVE-2026-5450",
+        "CVE-2026-5928",
+        "CVE-2026-6238",
+        "CVE-2019-1010022",
+        "CVE-2019-1010023",
+        "CVE-2018-20796",
+        "CVE-2019-9192",
+        "CVE-2019-1010024",
+        "CVE-2019-1010025",
+        "CVE-2010-4756"
+      ],
+      "merged_count": 11,
+      "fix_version": null,
+      "id": "f-4fdd5335",
+      "risk_score": 56,
+      "scores": {
+        "P_RF": 0.53,
+        "S_retrieval": 0.8,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "11 vulnerabilities affect bkimminich/juice-shop:latest (debian 13.5) / libc6-2.41-12+deb13u3; the most severe is CVE-2026-5435, a medium issue. A single upgrade of this package clears all 11, so treat it as one action rather than 11 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "Sandbox escape in notevil and argencoders-notevil",
+      "affected_resource": "Node.js / notevil-1.3.3",
+      "description": "This affects all versions of package notevil; all versions of package argencoders-notevil. It is vulnerable to Sandbox Escape leading to Prototype pollution. The package fails to restrict access to the main context, allowing an attacker to add or modify an object's prototype. **Note:** This vulnerability derives from an incomplete fix in [SNYK-JS-NOTEVIL-608878](https://security.snyk.io/vuln/SNYK-JS-NOTEVIL-608878).",
+      "cve_id": "CVE-2021-23771",
+      "cvss_score": 6.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-80717ce7",
+      "risk_score": 56,
+      "scores": {
+        "P_RF": 0.56,
+        "S_retrieval": 0.74,
+        "S_asset": 0.6,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2021-23771 (CVSS 6.5) is a medium vulnerability affecting Node.js / notevil-1.3.3. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "checkov",
+      "type": "MISCONFIGURATION",
+      "severity": "HIGH",
+      "title": "CKV_AWS_144: Ensure that S3 bucket has cross-region replication enabled",
+      "affected_resource": "aws_s3_bucket.uploads (/main.tf:105)",
+      "description": "https://docs.prismacloud.io/en/enterprise-edition/policy-reference/aws-policies/aws-general-policies/ensure-that-s3-bucket-has-cross-region-replication-enabled",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "CKV_AWS_144",
+      "environment": "production",
+      "internet_facing": true,
+      "reported_by": [
+        "checkov"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-f99410c9",
+      "risk_score": 55,
+      "scores": {
+        "P_RF": 0.46,
+        "S_retrieval": 0.59,
+        "S_asset": 1.0,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CKV_AWS_144: Ensure that S3 bucket has cross-region replication enabled (aws_s3_bucket.uploads (/main.tf:105)) leaves the resource open to the whole internet. Restrict ingress to known CIDR ranges."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "HIGH",
+      "title": "2 vulnerabilities in base64url (most severe: NSWG-ECO-428)",
+      "affected_resource": "Node.js / base64url-0.0.6",
+      "description": "`base64url` allocates uninitialized Buffers when number is passed in input on Node.js 4.x and below",
+      "cve_id": "NSWG-ECO-428",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "NSWG-ECO-428",
+        "GHSA-rvg8-pwq2-xj7q"
+      ],
+      "merged_count": 2,
+      "fix_version": null,
+      "id": "f-fd2bd20f",
+      "risk_score": 55,
+      "scores": {
+        "P_RF": 0.57,
+        "S_retrieval": 0.7,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": "cluster-1",
+      "explanation": "2 vulnerabilities affect Node.js / base64url-0.0.6; the most severe is NSWG-ECO-428, a high issue. A single upgrade of this package clears all 2, so treat it as one action rather than 2 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "HIGH",
+      "title": "nodejs-lodash: prototype pollution in zipObjectDeep function",
+      "affected_resource": "Node.js / lodash.set-4.3.2",
+      "description": "Prototype pollution attack when using _.zipObjectDeep in lodash before 4.17.20.",
+      "cve_id": "CVE-2020-8203",
+      "cvss_score": 7.4,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-1b8de102",
+      "risk_score": 55,
+      "scores": {
+        "P_RF": 0.52,
+        "S_retrieval": 0.75,
+        "S_asset": 0.6,
+        "S_EPSS": 0.05
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": "cluster-1",
+      "explanation": "CVE-2020-8203 (CVSS 7.4) is a high vulnerability affecting Node.js / lodash.set-4.3.2. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "LOW",
+      "title": "messageformat has a prototype pollution vulnerability",
+      "affected_resource": "Node.js / messageformat-2.3.0",
+      "description": "The messageformat package, an implementation of the Unicode MessageFormat 2 specification for JavaScript, is vulnerable to prototype pollution due to improper handling of message key paths in versions prior to 2.3.0. The flaw arises when processing nested message keys containing special characters (e.g., __proto__ ), which can lead to unintended modification of the JavaScript Object prototype. This vulnerability may allow a remote attacker to inject properties into the global object prototype via specially crafted message input, potentially causing denial of service or other undefined behaviors in applications using the affected component.",
+      "cve_id": "CVE-2025-57349",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-b9640e43",
+      "risk_score": 55,
+      "scores": {
+        "P_RF": 0.52,
+        "S_retrieval": 0.77,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2025-57349 is a low vulnerability affecting Node.js / messageformat-2.3.0. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "sonarqube",
+      "type": "VULNERABILITY",
+      "severity": "HIGH",
+      "title": "Dependency log4j-core 2.14.1 is affected by CVE-2021-44228.",
+      "affected_resource": "juice-shop:backend/pom.xml:88",
+      "description": "",
+      "cve_id": "CVE-2021-44228",
+      "cvss_score": null,
+      "rule_id": "java:S5852",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "sonarqube"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-ce3dc0be",
+      "risk_score": 54,
+      "scores": {
+        "P_RF": 0.36,
+        "S_retrieval": 0.65,
+        "S_asset": 0.6,
+        "S_EPSS": 1.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": "cluster-1",
+      "explanation": "CVE-2021-44228 is a high vulnerability affecting juice-shop:backend/pom.xml:88 and is on public exploitation feeds, so treat it as urgent. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "HIGH",
+      "title": "2 vulnerabilities in brace-expansion (most severe: CVE-2026-13149)",
+      "affected_resource": "Node.js / brace-expansion-1.1.15",
+      "description": "brace-expansion through 5.0.6 is vulnerable to denial of service. The expand() function exhibits exponential-time complexity in the number of consecutive non-expanding '{}' brace groups. An attacker who passes a crafted string to expand(), directly or transitively, can cause significant CPU consumption and event-loop blocking. The max option does not mitigate this, as it bounds the output size rather than the recursion work.",
+      "cve_id": "CVE-2026-13149",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2026-13149",
+        "CVE-2026-14257"
+      ],
+      "merged_count": 2,
+      "fix_version": null,
+      "id": "f-bb0538e0",
+      "risk_score": 53,
+      "scores": {
+        "P_RF": 0.59,
+        "S_retrieval": 0.58,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": "cluster-1",
+      "explanation": "2 vulnerabilities affect Node.js / brace-expansion-1.1.15; the most severe is CVE-2026-13149, a high issue. A single upgrade of this package clears all 2, so treat it as one action rather than 2 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "file-type: file-type: Denial of Service due to infinite loop in ASF file parsing",
+      "affected_resource": "Node.js / file-type-16.5.4",
+      "description": "file-type detects the file type of a file, stream, or data. Prior to 21.3.1, a denial of service vulnerability exists in the ASF (WMV/WMA) file type detection parser. When parsing a crafted input where an ASF sub-header has a size field of zero, the parser enters an infinite loop. The payload value becomes negative (-24), causing tokenizer.ignore(payload) to move the read position backwards, so the same sub-header is read repeatedly forever. Any application that uses file-type to detect the type of untrusted/attacker-controlled input is affected. An attacker can stall the Node.js event loop with a 55-byte payload. Fixed in version 21.3.1.",
+      "cve_id": "CVE-2026-31808",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-aa321b8a",
+      "risk_score": 53,
+      "scores": {
+        "P_RF": 0.46,
+        "S_retrieval": 0.82,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2026-31808 is a medium vulnerability affecting Node.js / file-type-16.5.4. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "HIGH",
+      "title": "8 vulnerabilities in multer (most severe: CVE-2026-2359)",
+      "affected_resource": "Node.js / multer-1.4.5-lts.2",
+      "description": "Multer is a node.js middleware for handling `multipart/form-data`. A vulnerability in Multer prior to version 2.1.0 allows an attacker to trigger a Denial of Service (DoS) by dropping connection during file upload, potentially causing resource exhaustion. Users should upgrade to version 2.1.0 to receive a patch. No known workarounds are available.",
+      "cve_id": "CVE-2026-2359",
+      "cvss_score": 7.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2026-2359",
+        "CVE-2026-3304",
+        "CVE-2026-3520",
+        "CVE-2025-47935",
+        "CVE-2025-47944",
+        "CVE-2025-48997",
+        "CVE-2025-7338",
+        "CVE-2026-5079"
+      ],
+      "merged_count": 8,
+      "fix_version": null,
+      "id": "f-bd259bf6",
+      "risk_score": 53,
+      "scores": {
+        "P_RF": 0.49,
+        "S_retrieval": 0.76,
+        "S_asset": 0.6,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": "cluster-1",
+      "explanation": "8 vulnerabilities affect Node.js / multer-1.4.5-lts.2; the most severe is CVE-2026-2359 (CVSS 7.5), a high issue. A single upgrade of this package clears all 8, so treat it as one action rather than 8 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "HIGH",
+      "title": "8 vulnerabilities in sanitize-html (most severe: CVE-2022-25887)",
+      "affected_resource": "Node.js / sanitize-html-1.4.2",
+      "description": "The package sanitize-html before 2.7.1 are vulnerable to Regular Expression Denial of Service (ReDoS) due to insecure global regular expression replacement logic of HTML comment removal.",
+      "cve_id": "CVE-2022-25887",
+      "cvss_score": 7.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2022-25887",
+        "CVE-2016-1000237",
+        "CVE-2017-16016",
+        "CVE-2021-26539",
+        "CVE-2021-26540",
+        "CVE-2024-21501",
+        "CVE-2019-25225",
+        "NSWG-ECO-154"
+      ],
+      "merged_count": 8,
+      "fix_version": null,
+      "id": "f-f4ce03ca",
+      "risk_score": 52,
+      "scores": {
+        "P_RF": 0.47,
+        "S_retrieval": 0.73,
+        "S_asset": 0.6,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "8 vulnerabilities affect Node.js / sanitize-html-1.4.2; the most severe is CVE-2022-25887 (CVSS 7.5), a high issue. A single upgrade of this package clears all 8, so treat it as one action rather than 8 separate tickets."
+    },
+    {
+      "source": "checkov",
+      "type": "MISCONFIGURATION",
+      "severity": "HIGH",
+      "title": "CKV_AWS_286: Ensure IAM policies does not allow privilege escalation",
+      "affected_resource": "aws_iam_role_policy.app_deploy_wildcard (/main.tf:133)",
+      "description": "https://docs.prismacloud.io/en/enterprise-edition/policy-reference/aws-policies/aws-iam-policies/bc-aws-286",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "CKV_AWS_286",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "checkov"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-9d339fee",
+      "risk_score": 51,
+      "scores": {
+        "P_RF": 0.53,
+        "S_retrieval": 0.6,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CKV_AWS_286: Ensure IAM policies does not allow privilege escalation at aws_iam_role_policy.app_deploy_wildcard (/main.tf:133). Apply the recommended secure configuration in the infrastructure code."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "LOW",
+      "title": "@tootallnate/once: @tootallnate/once: Denial of Service due to incorrect control flow scoping with AbortSignal",
+      "affected_resource": "Node.js / @tootallnate/once-1.1.2",
+      "description": "Versions of the package @tootallnate/once before 3.0.1 are vulnerable to Incorrect Control Flow Scoping in promise resolving when AbortSignal option is used. The Promise remains in a permanently pending state after the signal is aborted, causing any await or .then() usage to hang indefinitely. This can cause a control-flow leak that can lead to stalled requests, blocked workers, or degraded application availability.",
+      "cve_id": "CVE-2026-3449",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-d6e36fce",
+      "risk_score": 51,
+      "scores": {
+        "P_RF": 0.48,
+        "S_retrieval": 0.69,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2026-3449 is a low vulnerability affecting Node.js / @tootallnate/once-1.1.2. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "uuid: uuid: Out-of-bounds write vulnerability impacts data integrity and confidentiality",
+      "affected_resource": "Node.js / uuid-8.3.2",
+      "description": "uuid is for the creation of RFC9562 (formerly RFC4122) UUIDs. Prior to 14.0.0, v3, v5, and v6 accept external output buffers but do not reject out-of-range writes (small buf or large offset). This allows silent partial writes into caller-provided buffers. This vulnerability is fixed in 14.0.0.",
+      "cve_id": "CVE-2026-41907",
+      "cvss_score": 7.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-d316d712",
+      "risk_score": 51,
+      "scores": {
+        "P_RF": 0.44,
+        "S_retrieval": 0.75,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2026-41907 (CVSS 7.5) is a medium vulnerability affecting Node.js / uuid-8.3.2. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "aws",
+      "type": "IAM",
+      "severity": "HIGH",
+      "title": "IAM role has the AdministratorAccess policy attached.",
+      "affected_resource": "role/aws-lambda-fully0funiction",
+      "description": "",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "iam_admin_policy",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "aws"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-b9ea36f7",
+      "risk_score": 50,
+      "scores": {
+        "P_RF": 0.53,
+        "S_retrieval": 0.56,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "IAM role has the AdministratorAccess policy attached. on role/aws-lambda-fully0funiction. Over-broad permissions let a compromised identity do far more damage. Apply least-privilege and remove wildcard/admin grants."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "LOW",
+      "title": "body-parser: body-parser: Denial of Service via invalid limit option",
+      "affected_resource": "Node.js / body-parser-1.20.5",
+      "description": "Impact: In body-parser versions prior to 1.20.6 (1.x line) and 2.3.0 (2.x line), when the parser is configured with an invalid limit option value such as an unparseable string or NaN, bytes.parse returns null and the request body size check is silently skipped. Applications that rely on limit as their primary safeguard against oversized request bodies will accept arbitrarily large payloads, leading to excessive memory and CPU usage and denial of service. Patches: This issue is fixed in body-parser 1.20.6 and 2.3.0. After the fix, invalid limit values throw a clear error at parser construction time instead of silently disabling enforcement, while null and undefined continue to fall back to the default limit of 100kb. Workarounds: Validate the limit value before passing it to body-parser. For example, parse the value at startup and reject any configuration where the result is null or a non-finite number.",
+      "cve_id": "CVE-2026-12590",
+      "cvss_score": 5.9,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-22cc56bb",
+      "risk_score": 49,
+      "scores": {
+        "P_RF": 0.45,
+        "S_retrieval": 0.68,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2026-12590 (CVSS 5.9) is a low vulnerability affecting Node.js / body-parser-1.20.5. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "HIGH",
+      "title": "2 vulnerabilities in engine.io (most severe: CVE-2026-59725)",
+      "affected_resource": "Node.js / engine.io-4.1.2",
+      "description": "Socket.IO enables bidirectional and low-latency communication for every platform. From 4.1.0 before 6.6.7, Engine.IO protocol v4 polling transport does not properly close the HTTP response for invalid binary POST requests with Content-Type: application/octet-stream, allowing an unauthenticated attacker to exhaust server-side connections and sockets. This issue is fixed in version 6.6.7.",
+      "cve_id": "CVE-2026-59725",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2026-59725",
+        "CVE-2022-41940"
+      ],
+      "merged_count": 2,
+      "fix_version": null,
+      "id": "f-95ce11ad",
+      "risk_score": 49,
+      "scores": {
+        "P_RF": 0.42,
+        "S_retrieval": 0.71,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "2 vulnerabilities affect Node.js / engine.io-4.1.2; the most severe is CVE-2026-59725, a high issue. A single upgrade of this package clears all 2, so treat it as one action rather than 2 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "HIGH",
+      "title": "2 vulnerabilities in jws (most severe: CVE-2016-1000223)",
+      "affected_resource": "Node.js / jws-0.2.6",
+      "description": "Since \"algorithm\" isn't enforced in `jws.verify()`, a malicious user could choose what algorithm is sent to the server. If the server is expecting RSA but is sent HMAC-SHA with RSA's public key, the server will think the public key is actually an HMAC private key. This could be used to forge any data an attacker wants.\n\nIn addition, there is the `none` algorithm to be concerned about.  In versions prior to 3.0.0, verification of the token could be bypassed when the `alg` field is set to `none`.\n\n*Edit ( 7/29/16 ): A previous version of this advisory incorrectly stated that the vulnerability was patched in version 2.0.0 instead of 3.0.0. The advisory has been updated to reflect this new information. Thanks to Fabien Catteau for reporting the error.*",
+      "cve_id": "CVE-2016-1000223",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2016-1000223",
+        "CVE-2025-65945"
+      ],
+      "merged_count": 2,
+      "fix_version": null,
+      "id": "f-859b9950",
+      "risk_score": 49,
+      "scores": {
+        "P_RF": 0.46,
+        "S_retrieval": 0.67,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "2 vulnerabilities affect Node.js / jws-0.2.6; the most severe is CVE-2016-1000223, a high issue. A single upgrade of this package clears all 2, so treat it as one action rather than 2 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "HIGH",
+      "title": "3 vulnerabilities in minimatch (most severe: CVE-2026-26996)",
+      "affected_resource": "Node.js / minimatch-3.0.5",
+      "description": "minimatch is a minimal matching utility for converting glob expressions into JavaScript RegExp objects. Versions 10.2.0 and below are vulnerable to Regular Expression Denial of Service (ReDoS) when a glob pattern contains many consecutive * wildcards followed by a literal character that doesn't appear in the test string. Each * compiles to a separate [^/]*? regex group, and when the match fails, V8's regex engine backtracks exponentially across all possible splits. The time complexity is O(4^N) where N is the number of * characters. With N=15, a single minimatch() call takes ~2 seconds. With N=34, it hangs effectively forever. Any application that passes user-controlled strings to minimatch() as the pattern argument is vulnerable to DoS. This issue has been fixed in version 10.2.1.",
+      "cve_id": "CVE-2026-26996",
+      "cvss_score": 7.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2026-26996",
+        "CVE-2026-27903",
+        "CVE-2026-27904"
+      ],
+      "merged_count": 3,
+      "fix_version": null,
+      "id": "f-7e895969",
+      "risk_score": 49,
+      "scores": {
+        "P_RF": 0.43,
+        "S_retrieval": 0.69,
+        "S_asset": 0.6,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "3 vulnerabilities affect Node.js / minimatch-3.0.5; the most severe is CVE-2026-26996 (CVSS 7.5), a high issue. A single upgrade of this package clears all 3, so treat it as one action rather than 3 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "HIGH",
+      "title": "2 vulnerabilities in socket.io-parser (most severe: CVE-2026-33151)",
+      "affected_resource": "Node.js / socket.io-parser-4.0.5",
+      "description": "Socket.IO is an open source, real-time, bidirectional, event-based, communication framework. Prior to versions 3.3.5, 3.4.4, and 4.2.6, a specially crafted Socket.IO packet can make the server wait for a large number of binary attachments and buffer them, which can be exploited to make the server run out of memory. This issue has been patched in versions 3.3.5, 3.4.4, and 4.2.6.",
+      "cve_id": "CVE-2026-33151",
+      "cvss_score": 7.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2026-33151",
+        "CVE-2023-32695"
+      ],
+      "merged_count": 2,
+      "fix_version": null,
+      "id": "f-e9acba3b",
+      "risk_score": 49,
+      "scores": {
+        "P_RF": 0.45,
+        "S_retrieval": 0.66,
+        "S_asset": 0.6,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "2 vulnerabilities affect Node.js / socket.io-parser-4.0.5; the most severe is CVE-2026-33151 (CVSS 7.5), a high issue. A single upgrade of this package clears all 2, so treat it as one action rather than 2 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "CRITICAL",
+      "title": "12 vulnerabilities in tar (most severe: CVE-2026-59873)",
+      "affected_resource": "Node.js / tar-6.2.1",
+      "description": "node-tar is a tar archive manipulation library for Node.js. Prior to 7.5.19, node-tar does not enforce hard upper bounds on total decompressed data, entry counts, or decompression ratio in extraction and parsing paths such as src/extract.ts, allowing a small crafted gzip bomb to exhaust disk space and CPU. This issue is fixed in version 7.5.19.",
+      "cve_id": "CVE-2026-59873",
+      "cvss_score": 7.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2026-59873",
+        "CVE-2026-59874",
+        "CVE-2026-26960",
+        "CVE-2026-29786",
+        "CVE-2026-23745",
+        "CVE-2026-23950",
+        "CVE-2026-31802",
+        "CVE-2026-24842",
+        "CVE-2026-59871",
+        "CVE-2026-53655",
+        "CVE-2026-59875",
+        "GHSA-r292-9mhp-454m"
+      ],
+      "merged_count": 12,
+      "fix_version": null,
+      "id": "f-e6ac11ce",
+      "risk_score": 49,
+      "scores": {
+        "P_RF": 0.42,
+        "S_retrieval": 0.72,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "12 vulnerabilities affect Node.js / tar-6.2.1; the most severe is CVE-2026-59873 (CVSS 7.5), a critical issue. A single upgrade of this package clears all 12, so treat it as one action rather than 12 separate tickets."
+    },
+    {
+      "source": "gitleaks",
+      "type": "SECRET",
+      "severity": "HIGH",
+      "title": "Uncovered a JSON Web Token, which may lead to unauthorized access to web applications and sensitive user data. committed to source",
+      "affected_resource": "frontend/src/app/app.guard.spec.ts:46",
+      "description": "Rule jwt matched.",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "jwt",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "gitleaks"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-ce9988da",
+      "risk_score": 48,
+      "scores": {
+        "P_RF": 0.43,
+        "S_retrieval": 0.67,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "A secret was committed at frontend/src/app/app.guard.spec.ts:46; it could be reused by anyone with repository access. Rotate the credential immediately and remove it from git history."
+    },
+    {
+      "source": "gitleaks",
+      "type": "SECRET",
+      "severity": "HIGH",
+      "title": "Uncovered a JSON Web Token, which may lead to unauthorized access to web applications and sensitive user data. committed to source",
+      "affected_resource": "frontend/src/app/last-login-ip/last-login-ip.component.spec.ts:72",
+      "description": "Rule jwt matched.",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "jwt",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "gitleaks"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-9585b475",
+      "risk_score": 48,
+      "scores": {
+        "P_RF": 0.43,
+        "S_retrieval": 0.67,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "A secret was committed at frontend/src/app/last-login-ip/last-login-ip.component.spec.ts:72; it could be reused by anyone with repository access. Rotate the credential immediately and remove it from git history."
+    },
+    {
+      "source": "gitleaks",
+      "type": "SECRET",
+      "severity": "HIGH",
+      "title": "Uncovered a JSON Web Token, which may lead to unauthorized access to web applications and sensitive user data. committed to source",
+      "affected_resource": "frontend/src/app/app.guard.spec.ts:38",
+      "description": "Rule jwt matched.",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "jwt",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "gitleaks"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-5f3f5111",
+      "risk_score": 48,
+      "scores": {
+        "P_RF": 0.43,
+        "S_retrieval": 0.67,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "A secret was committed at frontend/src/app/app.guard.spec.ts:38; it could be reused by anyone with repository access. Rotate the credential immediately and remove it from git history."
+    },
+    {
+      "source": "gitleaks",
+      "type": "SECRET",
+      "severity": "HIGH",
+      "title": "Uncovered a JSON Web Token, which may lead to unauthorized access to web applications and sensitive user data. committed to source",
+      "affected_resource": "frontend/src/app/last-login-ip/last-login-ip.component.spec.ts:62",
+      "description": "Rule jwt matched.",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "jwt",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "gitleaks"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-6bc1e990",
+      "risk_score": 48,
+      "scores": {
+        "P_RF": 0.43,
+        "S_retrieval": 0.67,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "A secret was committed at frontend/src/app/last-login-ip/last-login-ip.component.spec.ts:62; it could be reused by anyone with repository access. Rotate the credential immediately and remove it from git history."
+    },
+    {
+      "source": "gitleaks",
+      "type": "SECRET",
+      "severity": "HIGH",
+      "title": "Uncovered a JSON Web Token, which may lead to unauthorized access to web applications and sensitive user data. committed to source",
+      "affected_resource": "frontend/src/app/last-login-ip/last-login-ip.component.spec.ts:61",
+      "description": "Rule jwt matched.",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "jwt",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "gitleaks"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-e3eaff3b",
+      "risk_score": 48,
+      "scores": {
+        "P_RF": 0.43,
+        "S_retrieval": 0.67,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "A secret was committed at frontend/src/app/last-login-ip/last-login-ip.component.spec.ts:61; it could be reused by anyone with repository access. Rotate the credential immediately and remove it from git history."
+    },
+    {
+      "source": "aws",
+      "type": "IAM",
+      "severity": "HIGH",
+      "title": "IAM user has the AdministratorAccess policy attached directly.",
+      "affected_resource": "user/Cli-Access",
+      "description": "",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "iam_admin_policy",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "aws"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-41a4ad8b",
+      "risk_score": 48,
+      "scores": {
+        "P_RF": 0.48,
+        "S_retrieval": 0.59,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "IAM user has the AdministratorAccess policy attached directly. on user/Cli-Access. Over-broad permissions let a compromised identity do far more damage. Apply least-privilege and remove wildcard/admin grants."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "zlib: zlib: Denial of Service via infinite loop in CRC32 combine functions",
+      "affected_resource": "bkimminich/juice-shop:latest (debian 13.5) / zlib1g-1:1.3.dfsg+really1.3.1-1+b1",
+      "description": "zlib before 1.3.2 allows CPU consumption via crc32_combine64 and crc32_combine_gen64 because x2nmodp can do right shifts within a loop that has no termination condition.",
+      "cve_id": "CVE-2026-27171",
+      "cvss_score": 5.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-dbdeb3c6",
+      "risk_score": 47,
+      "scores": {
+        "P_RF": 0.43,
+        "S_retrieval": 0.64,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2026-27171 (CVSS 5.5) is a medium vulnerability affecting bkimminich/juice-shop:latest (debian 13.5) / zlib1g-1:1.3.dfsg+really1.3.1-1+b1. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "CRITICAL",
+      "title": "2 vulnerabilities in decompress (most severe: CVE-2026-53486)",
+      "affected_resource": "Node.js / decompress-4.2.1",
+      "description": "The decompress package for Node.js extracts archives. Prior to 10.2.1 and 11.1.3, archive extraction can create files and links outside the target directory. When extracting an archive to a directory, a crafted archive can read or write files outside that directory because hardlink and symlink entries are created without checking where targets point, path containment used a string prefix comparison, and file modes failed to remove setuid, setgid, or sticky bits. This issue is fixed in @xhmikosr/decompress versions 10.2.1 and 11.1.3.",
+      "cve_id": "CVE-2026-53486",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2026-53486",
+        "CVE-2026-10732"
+      ],
+      "merged_count": 2,
+      "fix_version": null,
+      "id": "f-3c3b96ea",
+      "risk_score": 47,
+      "scores": {
+        "P_RF": 0.39,
+        "S_retrieval": 0.71,
+        "S_asset": 0.6,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "2 vulnerabilities affect Node.js / decompress-4.2.1; the most severe is CVE-2026-53486, a critical issue. A single upgrade of this package clears all 2, so treat it as one action rather than 2 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "HIGH",
+      "title": "Authorization bypass in express-jwt",
+      "affected_resource": "Node.js / express-jwt-0.1.3",
+      "description": "In express-jwt (NPM package) up and including version 5.3.3, the algorithms entry to be specified in the configuration is not being enforced. When algorithms is not specified in the configuration, with the combination of jwks-rsa, it may lead to authorization bypass. You are affected by this vulnerability if all of the following conditions apply: - You are using express-jwt - You do not have **algorithms** configured in your express-jwt configuration. - You are using libraries such as jwks-rsa as the **secret**. You can fix this by specifying **algorithms** in the express-jwt configuration. See linked GHSA for example. This is also fixed in version 6.0.0.",
+      "cve_id": "CVE-2020-15084",
+      "cvss_score": 9.1,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-081d1a56",
+      "risk_score": 47,
+      "scores": {
+        "P_RF": 0.4,
+        "S_retrieval": 0.67,
+        "S_asset": 0.6,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2020-15084 (CVSS 9.1) is a high vulnerability affecting Node.js / express-jwt-0.1.3. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "CRITICAL",
+      "title": "5 vulnerabilities in jsonwebtoken (most severe: CVE-2015-9235)",
+      "affected_resource": "Node.js / jsonwebtoken-0.1.0",
+      "description": "In jsonwebtoken node module before 4.2.2 it is possible for an attacker to bypass verification when a token digitally signed with an asymmetric key (RS/ES family) of algorithms but instead the attacker send a token digitally signed with a symmetric algorithm (HS* family).",
+      "cve_id": "CVE-2015-9235",
+      "cvss_score": 9.8,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2015-9235",
+        "CVE-2022-23539",
+        "NSWG-ECO-17",
+        "CVE-2022-23540",
+        "CVE-2022-23541"
+      ],
+      "merged_count": 5,
+      "fix_version": null,
+      "id": "f-b861917a",
+      "risk_score": 47,
+      "scores": {
+        "P_RF": 0.36,
+        "S_retrieval": 0.7,
+        "S_asset": 0.6,
+        "S_EPSS": 0.09
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "5 vulnerabilities affect Node.js / jsonwebtoken-0.1.0; the most severe is CVE-2015-9235 (CVSS 9.8), a critical issue. A single upgrade of this package clears all 5, so treat it as one action rather than 5 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "socket.io: Unhandled 'error' event",
+      "affected_resource": "Node.js / socket.io-3.1.2",
+      "description": "Socket.IO is an open source, real-time, bidirectional, event-based, communication framework. A specially crafted Socket.IO packet can trigger an uncaught exception on the Socket.IO server, thus killing the Node.js process. This issue is fixed by commit `15af22fc22` which has been included in `socket.io@4.6.2` (released in May 2023). The fix was backported in the 2.x branch as well with commit `d30630ba10`. Users are advised to upgrade. Users unable to upgrade may attach a listener for the \"error\" event to catch these errors.\n",
+      "cve_id": "CVE-2024-38355",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-7322c8fc",
+      "risk_score": 47,
+      "scores": {
+        "P_RF": 0.43,
+        "S_retrieval": 0.63,
+        "S_asset": 0.6,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2024-38355 is a medium vulnerability affecting Node.js / socket.io-3.1.2. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "LOW",
+      "title": "cookie: cookie accepts cookie name, path, and domain with out of bounds characters",
+      "affected_resource": "Node.js / cookie-0.4.2",
+      "description": "cookie is a basic HTTP cookie parser and serializer for HTTP servers. The cookie name could be used to set other fields of the cookie, resulting in an unexpected cookie value. A similar escape can be used for path and domain, which could be abused to alter other fields of the cookie. Upgrade to 0.7.0, which updates the validation for name, path, and domain.",
+      "cve_id": "CVE-2024-47764",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-22d64acd",
+      "risk_score": 46,
+      "scores": {
+        "P_RF": 0.41,
+        "S_retrieval": 0.62,
+        "S_asset": 0.6,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2024-47764 is a low vulnerability affecting Node.js / cookie-0.4.2. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "CRITICAL",
+      "title": "crypto-js: PBKDF2 1,000 times weaker than specified in 1993 and 1.3M times weaker than current standard",
+      "affected_resource": "Node.js / crypto-js-3.3.0",
+      "description": "crypto-js is a JavaScript library of crypto standards. Prior to version 4.2.0, crypto-js PBKDF2 is 1,000 times weaker than originally specified in 1993, and at least 1,300,000 times weaker than current industry standard. This is because it both defaults to SHA1, a cryptographic hash algorithm considered insecure since at least 2005, and defaults to one single iteration, a 'strength' or 'difficulty' value specified at 1,000 when specified in 1993. PBKDF2 relies on iteration count as a countermeasure to preimage and collision attacks. If used to protect passwords, the impact is high. If used to generate signatures, the impact is high. Version 4.2.0 contains a patch for this issue. As a workaround, configure crypto-js to use SHA256 with at least 250,000 iterations.",
+      "cve_id": "CVE-2023-46233",
+      "cvss_score": 9.1,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-aca7c8ba",
+      "risk_score": 46,
+      "scores": {
+        "P_RF": 0.38,
+        "S_retrieval": 0.68,
+        "S_asset": 0.6,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2023-46233 (CVSS 9.1) is a critical vulnerability affecting Node.js / crypto-js-3.3.0. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "HIGH",
+      "title": "http-cache-semantics: Regular Expression Denial of Service (ReDoS) vulnerability",
+      "affected_resource": "Node.js / http-cache-semantics-3.8.1",
+      "description": "This affects versions of the package http-cache-semantics before 4.1.1. The issue can be exploited via malicious request header values sent to a server, when that server reads the cache policy from the request using this library.",
+      "cve_id": "CVE-2022-25881",
+      "cvss_score": 7.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-e6d29480",
+      "risk_score": 46,
+      "scores": {
+        "P_RF": 0.4,
+        "S_retrieval": 0.63,
+        "S_asset": 0.6,
+        "S_EPSS": 0.02
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2022-25881 (CVSS 7.5) is a high vulnerability affecting Node.js / http-cache-semantics-3.8.1. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "sonarqube",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "CORS policy allows any origin (Access-Control-Allow-Origin: *).",
+      "affected_resource": "juice-shop:backend/src/app.js:17",
+      "description": "",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "javascript:S5122",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "sonarqube"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-283c2479",
+      "risk_score": 44,
+      "scores": {
+        "P_RF": 0.38,
+        "S_retrieval": 0.61,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "At juice-shop:backend/src/app.js:17, the CORS policy trusts any origin, letting untrusted sites call the API with credentials. Restrict Access-Control-Allow-Origin to an explicit allow-list of trusted domains."
+    },
+    {
+      "source": "gitleaks",
+      "type": "SECRET",
+      "severity": "HIGH",
+      "title": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations. committed to source",
+      "affected_resource": "data/static/users.yml:88",
+      "description": "Rule generic-api-key matched.",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "generic-api-key",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "gitleaks"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-e2d386fe",
+      "risk_score": 44,
+      "scores": {
+        "P_RF": 0.36,
+        "S_retrieval": 0.65,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "A secret was committed at data/static/users.yml:88; it could be reused by anyone with repository access. Rotate the credential immediately and remove it from git history."
+    },
+    {
+      "source": "gitleaks",
+      "type": "SECRET",
+      "severity": "HIGH",
+      "title": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations. committed to source",
+      "affected_resource": "data/static/users.yml:151",
+      "description": "Rule generic-api-key matched.",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "generic-api-key",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "gitleaks"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-1b57b452",
+      "risk_score": 44,
+      "scores": {
+        "P_RF": 0.36,
+        "S_retrieval": 0.65,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "A secret was committed at data/static/users.yml:151; it could be reused by anyone with repository access. Rotate the credential immediately and remove it from git history."
+    },
+    {
+      "source": "gitleaks",
+      "type": "SECRET",
+      "severity": "HIGH",
+      "title": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations. committed to source",
+      "affected_resource": "frontend/src/app/faucet/faucet.component.ts:34",
+      "description": "Rule generic-api-key matched.",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "generic-api-key",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "gitleaks"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-e0707fb3",
+      "risk_score": 44,
+      "scores": {
+        "P_RF": 0.36,
+        "S_retrieval": 0.65,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "A secret was committed at frontend/src/app/faucet/faucet.component.ts:34; it could be reused by anyone with repository access. Rotate the credential immediately and remove it from git history."
+    },
+    {
+      "source": "gitleaks",
+      "type": "SECRET",
+      "severity": "HIGH",
+      "title": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations. committed to source",
+      "affected_resource": "frontend/src/app/last-login-ip/last-login-ip.component.spec.ts:78",
+      "description": "Rule generic-api-key matched.",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "generic-api-key",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "gitleaks"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-33db641e",
+      "risk_score": 44,
+      "scores": {
+        "P_RF": 0.36,
+        "S_retrieval": 0.65,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "A secret was committed at frontend/src/app/last-login-ip/last-login-ip.component.spec.ts:78; it could be reused by anyone with repository access. Rotate the credential immediately and remove it from git history."
+    },
+    {
+      "source": "gitleaks",
+      "type": "SECRET",
+      "severity": "HIGH",
+      "title": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations. committed to source",
+      "affected_resource": "frontend/src/app/oauth/oauth.component.spec.ts:91",
+      "description": "Rule generic-api-key matched.",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "generic-api-key",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "gitleaks"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-9b2425ed",
+      "risk_score": 44,
+      "scores": {
+        "P_RF": 0.36,
+        "S_retrieval": 0.65,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "A secret was committed at frontend/src/app/oauth/oauth.component.spec.ts:91; it could be reused by anyone with repository access. Rotate the credential immediately and remove it from git history."
+    },
+    {
+      "source": "gitleaks",
+      "type": "SECRET",
+      "severity": "HIGH",
+      "title": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations. committed to source",
+      "affected_resource": "frontend/src/app/oauth/oauth.component.spec.ts:98",
+      "description": "Rule generic-api-key matched.",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "generic-api-key",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "gitleaks"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-318ee06f",
+      "risk_score": 44,
+      "scores": {
+        "P_RF": 0.36,
+        "S_retrieval": 0.65,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "A secret was committed at frontend/src/app/oauth/oauth.component.spec.ts:98; it could be reused by anyone with repository access. Rotate the credential immediately and remove it from git history."
+    },
+    {
+      "source": "gitleaks",
+      "type": "SECRET",
+      "severity": "HIGH",
+      "title": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations. committed to source",
+      "affected_resource": "routes/login.ts:64",
+      "description": "Rule generic-api-key matched.",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "generic-api-key",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "gitleaks"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-0c952f18",
+      "risk_score": 44,
+      "scores": {
+        "P_RF": 0.36,
+        "S_retrieval": 0.65,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "A secret was committed at routes/login.ts:64; it could be reused by anyone with repository access. Rotate the credential immediately and remove it from git history."
+    },
+    {
+      "source": "gitleaks",
+      "type": "SECRET",
+      "severity": "HIGH",
+      "title": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations. committed to source",
+      "affected_resource": "routes/login.ts:65",
+      "description": "Rule generic-api-key matched.",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "generic-api-key",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "gitleaks"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-99324685",
+      "risk_score": 44,
+      "scores": {
+        "P_RF": 0.36,
+        "S_retrieval": 0.65,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "A secret was committed at routes/login.ts:65; it could be reused by anyone with repository access. Rotate the credential immediately and remove it from git history."
+    },
+    {
+      "source": "gitleaks",
+      "type": "SECRET",
+      "severity": "HIGH",
+      "title": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations. committed to source",
+      "affected_resource": "frontend/src/app/last-login-ip/last-login-ip.component.spec.ts:68",
+      "description": "Rule generic-api-key matched.",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "generic-api-key",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "gitleaks"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-5392e914",
+      "risk_score": 44,
+      "scores": {
+        "P_RF": 0.36,
+        "S_retrieval": 0.65,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "A secret was committed at frontend/src/app/last-login-ip/last-login-ip.component.spec.ts:68; it could be reused by anyone with repository access. Rotate the credential immediately and remove it from git history."
+    },
+    {
+      "source": "gitleaks",
+      "type": "SECRET",
+      "severity": "HIGH",
+      "title": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations. committed to source",
+      "affected_resource": "frontend/src/app/oauth/oauth.component.spec.ts:84",
+      "description": "Rule generic-api-key matched.",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "generic-api-key",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "gitleaks"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-b7748793",
+      "risk_score": 44,
+      "scores": {
+        "P_RF": 0.36,
+        "S_retrieval": 0.65,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "A secret was committed at frontend/src/app/oauth/oauth.component.spec.ts:84; it could be reused by anyone with repository access. Rotate the credential immediately and remove it from git history."
+    },
+    {
+      "source": "gitleaks",
+      "type": "SECRET",
+      "severity": "HIGH",
+      "title": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations. committed to source",
+      "affected_resource": "frontend/src/app/last-login-ip/last-login-ip.component.spec.ts:67",
+      "description": "Rule generic-api-key matched.",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "generic-api-key",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "gitleaks"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-eb7f44b3",
+      "risk_score": 44,
+      "scores": {
+        "P_RF": 0.36,
+        "S_retrieval": 0.65,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "A secret was committed at frontend/src/app/last-login-ip/last-login-ip.component.spec.ts:67; it could be reused by anyone with repository access. Rotate the credential immediately and remove it from git history."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "HIGH",
+      "title": "3 vulnerabilities in moment (most severe: CVE-2017-18214)",
+      "affected_resource": "Node.js / moment-2.0.0",
+      "description": "The moment module before 2.19.3 for Node.js is prone to a regular expression denial of service via a crafted date string, a different vulnerability than CVE-2016-4055.",
+      "cve_id": "CVE-2017-18214",
+      "cvss_score": 7.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2017-18214",
+        "CVE-2022-24785",
+        "CVE-2016-4055"
+      ],
+      "merged_count": 3,
+      "fix_version": null,
+      "id": "f-7c64bbf4",
+      "risk_score": 44,
+      "scores": {
+        "P_RF": 0.33,
+        "S_retrieval": 0.66,
+        "S_asset": 0.6,
+        "S_EPSS": 0.04
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "3 vulnerabilities affect Node.js / moment-2.0.0; the most severe is CVE-2017-18214 (CVSS 7.5), a high issue. A single upgrade of this package clears all 3, so treat it as one action rather than 3 separate tickets."
+    },
+    {
+      "source": "gitleaks",
+      "type": "SECRET",
+      "severity": "HIGH",
+      "title": "Identified a Private Key, which may compromise cryptographic security and sensitive data encryption. committed to source",
+      "affected_resource": "lib/insecurity.ts:23",
+      "description": "Rule private-key matched.",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "private-key",
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "gitleaks"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-efefc249",
+      "risk_score": 43,
+      "scores": {
+        "P_RF": 0.37,
+        "S_retrieval": 0.56,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "A secret was committed at lib/insecurity.ts:23; it could allow an attacker to impersonate the service. Rotate the credential immediately and remove it from git history."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "nodejs-got: missing verification of requested URLs allows redirects to UNIX sockets",
+      "affected_resource": "Node.js / got-8.3.2",
+      "description": "The got package before 12.1.0 (also fixed in 11.8.5) for Node.js allows a redirect to a UNIX socket.",
+      "cve_id": "CVE-2022-33987",
+      "cvss_score": 5.3,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-ccf5a02e",
+      "risk_score": 43,
+      "scores": {
+        "P_RF": 0.34,
+        "S_retrieval": 0.61,
+        "S_asset": 0.6,
+        "S_EPSS": 0.02
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2022-33987 (CVSS 5.3) is a medium vulnerability affecting Node.js / got-8.3.2. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "HIGH",
+      "title": "2 vulnerabilities in js-yaml (most severe: CVE-2026-59869)",
+      "affected_resource": "Node.js / js-yaml-3.14.2",
+      "description": "js-yaml is a JavaScript YAML parser and dumper. From 3.0.0 before 3.15.0 and from 4.0.0 before 4.3.0, js-yaml can spend quadratic CPU time parsing a document whose size grows only linearly when a chain of mappings uses merge keys where each mapping merges the previous one. This issue is fixed in versions 3.15.0 and 4.3.0.",
+      "cve_id": "CVE-2026-59869",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2026-59869",
+        "CVE-2026-53550"
+      ],
+      "merged_count": 2,
+      "fix_version": null,
+      "id": "f-f66d09dd",
+      "risk_score": 43,
+      "scores": {
+        "P_RF": 0.39,
+        "S_retrieval": 0.55,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "2 vulnerabilities affect Node.js / js-yaml-3.14.2; the most severe is CVE-2026-59869, a high issue. A single upgrade of this package clears all 2, so treat it as one action rather than 2 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "HIGH",
+      "title": "2 vulnerabilities in ws (most severe: CVE-2024-37890)",
+      "affected_resource": "Node.js / ws-7.4.6",
+      "description": "ws is an open source WebSocket client and server for Node.js. A request with a number of headers exceeding theserver.maxHeadersCount threshold could be used to crash a ws server. The vulnerability was fixed in ws@8.17.1 (e55e510) and backported to ws@7.5.10 (22c2876), ws@6.2.3 (eeb76d3), and ws@5.2.4 (4abd8f6). In vulnerable versions of ws, the issue can be mitigated in the following ways: 1. Reduce the maximum allowed length of the request headers using the --max-http-header-size=size and/or the maxHeaderSize options so that no more headers than the server.maxHeadersCount limit can be sent. 2. Set server.maxHeadersCount to 0 so that no limit is applied.",
+      "cve_id": "CVE-2024-37890",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2024-37890",
+        "CVE-2026-48779"
+      ],
+      "merged_count": 2,
+      "fix_version": null,
+      "id": "f-6334bcd9",
+      "risk_score": 43,
+      "scores": {
+        "P_RF": 0.36,
+        "S_retrieval": 0.57,
+        "S_asset": 0.6,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "2 vulnerabilities affect Node.js / ws-7.4.6; the most severe is CVE-2024-37890, a high issue. A single upgrade of this package clears all 2, so treat it as one action rather than 2 separate tickets."
+    }
+  ]
+}

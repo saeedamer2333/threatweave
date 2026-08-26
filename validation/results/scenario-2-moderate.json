@@ -1,0 +1,790 @@
+{
+  "run_id": "scenario-2-moderate",
+  "generated_at": "2026-08-23T10:01:50Z",
+  "health_score": 70,
+  "summary": {
+    "raw_findings": 47,
+    "after_dedup": 23,
+    "reduction_pct": 51.1,
+    "clusters": 0,
+    "critical": 0,
+    "high": 1,
+    "medium": 18,
+    "low": 4,
+    "suppressed": 0
+  },
+  "suppressions": [],
+  "clusters": [],
+  "findings": [
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "decompress: Decompress: Arbitrary file write leading to remote code execution via crafted ZIP archive (Zip Slip)",
+      "affected_resource": "Node.js / decompress-4.2.1",
+      "description": "All versions of the package decompress are vulnerable to Arbitrary File Write via Archive Extraction (Zip Slip) when extracting a ZIP archive containing two entries with the same path - the first being a symlink to an arbitrary target and the second being a regular file - the file content is written through the symlink to the target location outside the output directory. This is due to the microtask processing order that checks readlink for the second file before resolving symlink for the first file. An attacker can write arbitrary file on the host filesystem potentially leading to remote code execution by providing a specially crafted ZIP archive.\r\r**Note:**\r\rThis bypasses all existing path traversal protections including preventWritingThroughSymlink, added as a part of the fix for [CVE-2020-12265](https://security.snyk.io/vuln/SNYK-JS-DECOMPRESS-557358).",
+      "cve_id": "CVE-2026-10732",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-e219744b",
+      "risk_score": 74,
+      "scores": {
+        "P_RF": 0.82,
+        "S_retrieval": 0.8,
+        "S_asset": 0.85,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Moderate",
+      "cluster_id": null,
+      "explanation": "CVE-2026-10732 is a medium vulnerability affecting Node.js / decompress-4.2.1. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "moment.js: regular expression denial of service",
+      "affected_resource": "Node.js / moment-2.0.0",
+      "description": "The duration function in the moment package before 2.11.2 for Node.js allows remote attackers to cause a denial of service (CPU consumption) via a long string, aka a \"regular expression Denial of Service (ReDoS).\"",
+      "cve_id": "CVE-2016-4055",
+      "cvss_score": 6.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-018bdd63",
+      "risk_score": 64,
+      "scores": {
+        "P_RF": 0.62,
+        "S_retrieval": 0.72,
+        "S_asset": 0.85,
+        "S_EPSS": 0.1
+      },
+      "confidence": "Moderate",
+      "cluster_id": null,
+      "explanation": "CVE-2016-4055 (CVSS 6.5) is a medium vulnerability affecting Node.js / moment-2.0.0. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "Sandbox escape in notevil and argencoders-notevil",
+      "affected_resource": "Node.js / notevil-1.3.3",
+      "description": "This affects all versions of package notevil; all versions of package argencoders-notevil. It is vulnerable to Sandbox Escape leading to Prototype pollution. The package fails to restrict access to the main context, allowing an attacker to add or modify an object's prototype. **Note:** This vulnerability derives from an incomplete fix in [SNYK-JS-NOTEVIL-608878](https://security.snyk.io/vuln/SNYK-JS-NOTEVIL-608878).",
+      "cve_id": "CVE-2021-23771",
+      "cvss_score": 6.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-e1706816",
+      "risk_score": 61,
+      "scores": {
+        "P_RF": 0.56,
+        "S_retrieval": 0.74,
+        "S_asset": 0.85,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2021-23771 (CVSS 6.5) is a medium vulnerability affecting Node.js / notevil-1.3.3. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "11 vulnerabilities in libc6 (most severe: CVE-2026-5435)",
+      "affected_resource": "bkimminich/juice-shop:latest (debian 13.5) / libc6-2.41-12+deb13u3",
+      "description": "The deprecated functions ns_printrrf, ns_printrr and fp_nquery in the GNU C Library version 2.2 and newer fail to enforce the caller-supplied buffer length, and can result in an out-of-bounds write when printing TSIG records.",
+      "cve_id": "CVE-2026-5435",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2026-5435",
+        "CVE-2026-5450",
+        "CVE-2026-5928",
+        "CVE-2026-6238",
+        "CVE-2019-1010022",
+        "CVE-2019-1010023",
+        "CVE-2018-20796",
+        "CVE-2019-9192",
+        "CVE-2019-1010024",
+        "CVE-2019-1010025",
+        "CVE-2010-4756"
+      ],
+      "merged_count": 11,
+      "fix_version": null,
+      "id": "f-9d773468",
+      "risk_score": 61,
+      "scores": {
+        "P_RF": 0.53,
+        "S_retrieval": 0.8,
+        "S_asset": 0.85,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "11 vulnerabilities affect bkimminich/juice-shop:latest (debian 13.5) / libc6-2.41-12+deb13u3; the most severe is CVE-2026-5435, a medium issue. A single upgrade of this package clears all 11, so treat it as one action rather than 11 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "2 vulnerabilities in jsonwebtoken (most severe: CVE-2022-23540)",
+      "affected_resource": "Node.js / jsonwebtoken-0.1.0",
+      "description": "In versions `<=8.5.1` of `jsonwebtoken` library, lack of algorithm definition in the `jwt.verify()` function can lead to signature validation bypass due to defaulting to the `none` algorithm for signature verification. Users are affected if you do not specify algorithms in the `jwt.verify()` function. This issue has been fixed, please update to version 9.0.0 which removes the default support for the none algorithm in the `jwt.verify()` method. There will be no impact, if you update to version 9.0.0 and you don\u2019t need to allow for the `none` algorithm. If you need 'none' algorithm, you have to explicitly specify that in `jwt.verify()` options.",
+      "cve_id": "CVE-2022-23540",
+      "cvss_score": 7.6,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2022-23540",
+        "CVE-2022-23541"
+      ],
+      "merged_count": 2,
+      "fix_version": null,
+      "id": "f-010b6cd4",
+      "risk_score": 60,
+      "scores": {
+        "P_RF": 0.53,
+        "S_retrieval": 0.75,
+        "S_asset": 0.85,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "2 vulnerabilities affect Node.js / jsonwebtoken-0.1.0; the most severe is CVE-2022-23540 (CVSS 7.6), a medium issue. A single upgrade of this package clears all 2, so treat it as one action rather than 2 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "LOW",
+      "title": "messageformat has a prototype pollution vulnerability",
+      "affected_resource": "Node.js / messageformat-2.3.0",
+      "description": "The messageformat package, an implementation of the Unicode MessageFormat 2 specification for JavaScript, is vulnerable to prototype pollution due to improper handling of message key paths in versions prior to 2.3.0. The flaw arises when processing nested message keys containing special characters (e.g., __proto__ ), which can lead to unintended modification of the JavaScript Object prototype. This vulnerability may allow a remote attacker to inject properties into the global object prototype via specially crafted message input, potentially causing denial of service or other undefined behaviors in applications using the affected component.",
+      "cve_id": "CVE-2025-57349",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-0d1be62c",
+      "risk_score": 60,
+      "scores": {
+        "P_RF": 0.52,
+        "S_retrieval": 0.77,
+        "S_asset": 0.85,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2025-57349 is a low vulnerability affecting Node.js / messageformat-2.3.0. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "engine.io: Specially crafted HTTP request can trigger an uncaught exception",
+      "affected_resource": "Node.js / engine.io-4.1.2",
+      "description": "Engine.IO is the implementation of transport-based cross-browser/cross-device bi-directional communication layer for Socket.IO. A specially crafted HTTP request can trigger an uncaught exception on the Engine.IO server, thus killing the Node.js process. This impacts all the users of the engine.io package, including those who uses depending packages like socket.io. There is no known workaround except upgrading to a safe version. There are patches for this issue released in versions 3.6.1 and 6.2.1.",
+      "cve_id": "CVE-2022-41940",
+      "cvss_score": 6.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-516ebc74",
+      "risk_score": 59,
+      "scores": {
+        "P_RF": 0.55,
+        "S_retrieval": 0.68,
+        "S_asset": 0.85,
+        "S_EPSS": 0.02
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2022-41940 (CVSS 6.5) is a medium vulnerability affecting Node.js / engine.io-4.1.2. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "Out-of-bounds Read in base64url",
+      "affected_resource": "Node.js / base64url-0.0.6",
+      "description": "Versions of `base64url` before 3.0.0 are vulnerable to to out-of-bounds reads as it allocates uninitialized Buffers when number is passed in input on Node.js 4.x and below.\n\n\n## Recommendation\n\nUpdate to version 3.0.0 or later.",
+      "cve_id": "GHSA-rvg8-pwq2-xj7q",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-1908fe78",
+      "risk_score": 59,
+      "scores": {
+        "P_RF": 0.6,
+        "S_retrieval": 0.6,
+        "S_asset": 0.85,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Moderate",
+      "cluster_id": null,
+      "explanation": "GHSA-rvg8-pwq2-xj7q is a medium vulnerability affecting Node.js / base64url-0.0.6. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "checkov",
+      "type": "MISCONFIGURATION",
+      "severity": "HIGH",
+      "title": "CKV_AWS_24: Ensure no security groups allow ingress from 0.0.0.0:0 to port 22",
+      "affected_resource": "aws_security_group.juice_shop (/main.tf:34)",
+      "description": "https://docs.prismacloud.io/en/enterprise-edition/policy-reference/aws-policies/aws-networking-policies/networking-1-port-security",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "CKV_AWS_24",
+      "environment": "production",
+      "internet_facing": true,
+      "reachable_via_exposure": false,
+      "reported_by": [
+        "checkov"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-667f6e8d",
+      "risk_score": 58,
+      "scores": {
+        "P_RF": 0.43,
+        "S_retrieval": 0.74,
+        "S_asset": 1.0,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CKV_AWS_24: Ensure no security groups allow ingress from 0.0.0.0:0 to port 22 (aws_security_group.juice_shop (/main.tf:34)) leaves the resource open to the whole internet. Restrict ingress to known CIDR ranges."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "2 vulnerabilities in lodash (most severe: CVE-2026-2950)",
+      "affected_resource": "Node.js / lodash-2.4.2",
+      "description": "Impact:\n\nLodash versions 4.17.23 and earlier are vulnerable to prototype pollution in the _.unset and _.omit functions. The fix for (CVE-2025-13465: https://github.com/lodash/lodash/security/advisories/GHSA-xxjr-mmjv-4gpg) only guards against string key members, so an attacker can bypass the check by passing array-wrapped path segments. This allows deletion of properties from built-in prototypes such as Object.prototype, Number.prototype, and String.prototype.\n\nThe issue permits deletion of prototype properties but does not allow overwriting their original behavior.\n\nPatches:\n\nThis issue is patched in 4.18.0.\n\nWorkarounds:\n\nNone. Upgrade to the patched version.",
+      "cve_id": "CVE-2026-2950",
+      "cvss_score": 5.3,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2026-2950",
+        "CVE-2018-3721"
+      ],
+      "merged_count": 2,
+      "fix_version": null,
+      "id": "f-4868555c",
+      "risk_score": 58,
+      "scores": {
+        "P_RF": 0.52,
+        "S_retrieval": 0.7,
+        "S_asset": 0.85,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "2 vulnerabilities affect Node.js / lodash-2.4.2; the most severe is CVE-2026-2950 (CVSS 5.3), a medium issue. A single upgrade of this package clears all 2, so treat it as one action rather than 2 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "file-type: file-type: Denial of Service due to infinite loop in ASF file parsing",
+      "affected_resource": "Node.js / file-type-16.5.4",
+      "description": "file-type detects the file type of a file, stream, or data. Prior to 21.3.1, a denial of service vulnerability exists in the ASF (WMV/WMA) file type detection parser. When parsing a crafted input where an ASF sub-header has a size field of zero, the parser enters an infinite loop. The payload value becomes negative (-24), causing tokenizer.ignore(payload) to move the read position backwards, so the same sub-header is read repeatedly forever. Any application that uses file-type to detect the type of untrusted/attacker-controlled input is affected. An attacker can stall the Node.js event loop with a 55-byte payload. Fixed in version 21.3.1.",
+      "cve_id": "CVE-2026-31808",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-bd978c51",
+      "risk_score": 58,
+      "scores": {
+        "P_RF": 0.46,
+        "S_retrieval": 0.82,
+        "S_asset": 0.85,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2026-31808 is a medium vulnerability affecting Node.js / file-type-16.5.4. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "socket.io parser is a socket.io encoder and decoder written in JavaScr ...",
+      "affected_resource": "Node.js / socket.io-parser-4.0.5",
+      "description": "socket.io parser is a socket.io encoder and decoder written in JavaScript complying with version 5 of socket.io-protocol. A specially crafted Socket.IO packet can trigger an uncaught exception on the Socket.IO server, thus killing the Node.js process. A patch has been released in version 4.2.3.\n\n",
+      "cve_id": "CVE-2023-32695",
+      "cvss_score": 7.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-80fbb495",
+      "risk_score": 56,
+      "scores": {
+        "P_RF": 0.49,
+        "S_retrieval": 0.67,
+        "S_asset": 0.85,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2023-32695 (CVSS 7.5) is a medium vulnerability affecting Node.js / socket.io-parser-4.0.5. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "uuid: uuid: Out-of-bounds write vulnerability impacts data integrity and confidentiality",
+      "affected_resource": "Node.js / uuid-8.3.2",
+      "description": "uuid is for the creation of RFC9562 (formerly RFC4122) UUIDs. Prior to 14.0.0, v3, v5, and v6 accept external output buffers but do not reject out-of-range writes (small buf or large offset). This allows silent partial writes into caller-provided buffers. This vulnerability is fixed in 14.0.0.",
+      "cve_id": "CVE-2026-41907",
+      "cvss_score": 7.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-7a0b14f4",
+      "risk_score": 56,
+      "scores": {
+        "P_RF": 0.44,
+        "S_retrieval": 0.75,
+        "S_asset": 0.85,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2026-41907 (CVSS 7.5) is a medium vulnerability affecting Node.js / uuid-8.3.2. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "LOW",
+      "title": "@tootallnate/once: @tootallnate/once: Denial of Service due to incorrect control flow scoping with AbortSignal",
+      "affected_resource": "Node.js / @tootallnate/once-1.1.2",
+      "description": "Versions of the package @tootallnate/once before 3.0.1 are vulnerable to Incorrect Control Flow Scoping in promise resolving when AbortSignal option is used. The Promise remains in a permanently pending state after the signal is aborted, causing any await or .then() usage to hang indefinitely. This can cause a control-flow leak that can lead to stalled requests, blocked workers, or degraded application availability.",
+      "cve_id": "CVE-2026-3449",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-e49a6ea2",
+      "risk_score": 56,
+      "scores": {
+        "P_RF": 0.48,
+        "S_retrieval": 0.69,
+        "S_asset": 0.85,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2026-3449 is a low vulnerability affecting Node.js / @tootallnate/once-1.1.2. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "7 vulnerabilities in sanitize-html (most severe: CVE-2016-1000237)",
+      "affected_resource": "Node.js / sanitize-html-1.4.2",
+      "description": "sanitize-html before 1.4.3 has XSS.",
+      "cve_id": "CVE-2016-1000237",
+      "cvss_score": 6.1,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2016-1000237",
+        "CVE-2017-16016",
+        "CVE-2021-26539",
+        "CVE-2021-26540",
+        "CVE-2024-21501",
+        "CVE-2019-25225",
+        "NSWG-ECO-154"
+      ],
+      "merged_count": 7,
+      "fix_version": null,
+      "id": "f-8154b2f9",
+      "risk_score": 55,
+      "scores": {
+        "P_RF": 0.42,
+        "S_retrieval": 0.74,
+        "S_asset": 0.85,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "7 vulnerabilities affect Node.js / sanitize-html-1.4.2; the most severe is CVE-2016-1000237 (CVSS 6.1), a medium issue. A single upgrade of this package clears all 7, so treat it as one action rather than 7 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "LOW",
+      "title": "body-parser: body-parser: Denial of Service via invalid limit option",
+      "affected_resource": "Node.js / body-parser-1.20.5",
+      "description": "Impact: In body-parser versions prior to 1.20.6 (1.x line) and 2.3.0 (2.x line), when the parser is configured with an invalid limit option value such as an unparseable string or NaN, bytes.parse returns null and the request body size check is silently skipped. Applications that rely on limit as their primary safeguard against oversized request bodies will accept arbitrarily large payloads, leading to excessive memory and CPU usage and denial of service. Patches: This issue is fixed in body-parser 1.20.6 and 2.3.0. After the fix, invalid limit values throw a clear error at parser construction time instead of silently disabling enforcement, while null and undefined continue to fall back to the default limit of 100kb. Workarounds: Validate the limit value before passing it to body-parser. For example, parse the value at startup and reject any configuration where the result is null or a non-finite number.",
+      "cve_id": "CVE-2026-12590",
+      "cvss_score": 5.9,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-2aac6dfd",
+      "risk_score": 54,
+      "scores": {
+        "P_RF": 0.45,
+        "S_retrieval": 0.68,
+        "S_asset": 0.85,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2026-12590 (CVSS 5.9) is a low vulnerability affecting Node.js / body-parser-1.20.5. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "4 vulnerabilities in tar (most severe: CVE-2026-59871)",
+      "affected_resource": "Node.js / tar-6.2.1",
+      "description": "node-tar is a tar archive manipulation library for Node.js. Prior to 7.5.18, node-tar coerces all-digit PAX path and linkpath values in src/pax.ts to JavaScript numbers, causing downstream path handling such as normalizeWindowsPath(entry.path).split('/') to throw an uncaught TypeError. This issue is fixed in version 7.5.18.",
+      "cve_id": "CVE-2026-59871",
+      "cvss_score": 7.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2026-59871",
+        "CVE-2026-53655",
+        "CVE-2026-59875",
+        "GHSA-r292-9mhp-454m"
+      ],
+      "merged_count": 4,
+      "fix_version": null,
+      "id": "f-ac5f458e",
+      "risk_score": 52,
+      "scores": {
+        "P_RF": 0.43,
+        "S_retrieval": 0.61,
+        "S_asset": 0.85,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "4 vulnerabilities affect Node.js / tar-6.2.1; the most severe is CVE-2026-59871 (CVSS 7.5), a medium issue. A single upgrade of this package clears all 4, so treat it as one action rather than 4 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "zlib: zlib: Denial of Service via infinite loop in CRC32 combine functions",
+      "affected_resource": "bkimminich/juice-shop:latest (debian 13.5) / zlib1g-1:1.3.dfsg+really1.3.1-1+b1",
+      "description": "zlib before 1.3.2 allows CPU consumption via crc32_combine64 and crc32_combine_gen64 because x2nmodp can do right shifts within a loop that has no termination condition.",
+      "cve_id": "CVE-2026-27171",
+      "cvss_score": 5.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-a3b8db1e",
+      "risk_score": 52,
+      "scores": {
+        "P_RF": 0.43,
+        "S_retrieval": 0.64,
+        "S_asset": 0.85,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2026-27171 (CVSS 5.5) is a medium vulnerability affecting bkimminich/juice-shop:latest (debian 13.5) / zlib1g-1:1.3.dfsg+really1.3.1-1+b1. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "socket.io: Unhandled 'error' event",
+      "affected_resource": "Node.js / socket.io-3.1.2",
+      "description": "Socket.IO is an open source, real-time, bidirectional, event-based, communication framework. A specially crafted Socket.IO packet can trigger an uncaught exception on the Socket.IO server, thus killing the Node.js process. This issue is fixed by commit `15af22fc22` which has been included in `socket.io@4.6.2` (released in May 2023). The fix was backported in the 2.x branch as well with commit `d30630ba10`. Users are advised to upgrade. Users unable to upgrade may attach a listener for the \"error\" event to catch these errors.\n",
+      "cve_id": "CVE-2024-38355",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-c0ae3c55",
+      "risk_score": 52,
+      "scores": {
+        "P_RF": 0.43,
+        "S_retrieval": 0.63,
+        "S_asset": 0.85,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2024-38355 is a medium vulnerability affecting Node.js / socket.io-3.1.2. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "LOW",
+      "title": "cookie: cookie accepts cookie name, path, and domain with out of bounds characters",
+      "affected_resource": "Node.js / cookie-0.4.2",
+      "description": "cookie is a basic HTTP cookie parser and serializer for HTTP servers. The cookie name could be used to set other fields of the cookie, resulting in an unexpected cookie value. A similar escape can be used for path and domain, which could be abused to alter other fields of the cookie. Upgrade to 0.7.0, which updates the validation for name, path, and domain.",
+      "cve_id": "CVE-2024-47764",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-4f93dafc",
+      "risk_score": 51,
+      "scores": {
+        "P_RF": 0.41,
+        "S_retrieval": 0.62,
+        "S_asset": 0.85,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2024-47764 is a low vulnerability affecting Node.js / cookie-0.4.2. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "js-yaml: js-yaml: Denial of Service via crafted YAML merge keys",
+      "affected_resource": "Node.js / js-yaml-3.14.2",
+      "description": "js-yaml is a JavaScript YAML parser and dumper. Prior to 4.2.0 and 3.15.0, a crafted YAML document can trigger algorithmic CPU exhaustion in js-yaml merge-key processing (<<) by repeating the same alias many times in a merge sequence. This causes quadratic parse-time behavior relative to input size and can block a Node.js worker/event loop for seconds with a relatively small payload (tens of KB), resulting in denial of service. The issue is in merge handling inside lib/loader.js. This vulnerability is fixed in 4.2.0 and 3.15.0.",
+      "cve_id": "CVE-2026-53550",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-0a2fa569",
+      "risk_score": 50,
+      "scores": {
+        "P_RF": 0.35,
+        "S_retrieval": 0.7,
+        "S_asset": 0.85,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2026-53550 is a medium vulnerability affecting Node.js / js-yaml-3.14.2. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "MEDIUM",
+      "title": "nodejs-got: missing verification of requested URLs allows redirects to UNIX sockets",
+      "affected_resource": "Node.js / got-8.3.2",
+      "description": "The got package before 12.1.0 (also fixed in 11.8.5) for Node.js allows a redirect to a UNIX socket.",
+      "cve_id": "CVE-2022-33987",
+      "cvss_score": 5.3,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": true,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-122cb39f",
+      "risk_score": 48,
+      "scores": {
+        "P_RF": 0.34,
+        "S_retrieval": 0.61,
+        "S_asset": 0.85,
+        "S_EPSS": 0.02
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2022-33987 (CVSS 5.3) is a medium vulnerability affecting Node.js / got-8.3.2. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "aws",
+      "type": "IAM",
+      "severity": "MEDIUM",
+      "title": "IAM user has 2 active access keys; unused keys widen the attack surface.",
+      "affected_resource": "user/Cli-Access",
+      "description": "",
+      "cve_id": null,
+      "cvss_score": null,
+      "rule_id": "iam_multiple_access_keys",
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": false,
+      "reported_by": [
+        "aws"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-5dc4a317",
+      "risk_score": 48,
+      "scores": {
+        "P_RF": 0.4,
+        "S_retrieval": 0.7,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "IAM user has 2 active access keys; unused keys widen the attack surface. on user/Cli-Access. Over-broad permissions let a compromised identity do far more damage. Apply least-privilege and remove wildcard/admin grants."
+    }
+  ],
+  "history": [
+    {
+      "run_id": "scenario-1-baseline",
+      "generated_at": "2026-08-23T10:01:35Z",
+      "health_score": 97,
+      "raw_findings": 12,
+      "after_dedup": 6,
+      "reduction_pct": 50.0,
+      "suppressed": 0,
+      "clusters": 0,
+      "critical": 0,
+      "high": 0
+    },
+    {
+      "run_id": "scenario-2-moderate",
+      "generated_at": "2026-08-23T10:01:50Z",
+      "health_score": 70,
+      "raw_findings": 47,
+      "after_dedup": 23,
+      "reduction_pct": 51.1,
+      "suppressed": 0,
+      "clusters": 0,
+      "critical": 0,
+      "high": 1
+    }
+  ]
+}

@@ -1,0 +1,80 @@
+[
+  {
+    "scenario": "scenario-1-baseline",
+    "label": "Baseline (remediated)",
+    "expected": "Health above 80, no attack paths",
+    "health_score": 97,
+    "raw_findings": 12,
+    "actionable": 6,
+    "reduction_pct": 50.0,
+    "clusters": 0,
+    "critical": 0,
+    "high": 0,
+    "runtime_seconds": 39.5,
+    "checks": [
+      {
+        "name": "health 80-100",
+        "passed": true,
+        "actual": 97
+      },
+      {
+        "name": "clusters <= 0",
+        "passed": true,
+        "actual": 0
+      }
+    ],
+    "passed": true
+  },
+  {
+    "scenario": "scenario-2-moderate",
+    "label": "Moderate risk (partially remediated)",
+    "expected": "Health 40-79, remaining internet exposure surfaced",
+    "health_score": 70,
+    "raw_findings": 47,
+    "actionable": 23,
+    "reduction_pct": 51.1,
+    "clusters": 0,
+    "critical": 0,
+    "high": 1,
+    "runtime_seconds": 14.6,
+    "checks": [
+      {
+        "name": "health 40-79",
+        "passed": true,
+        "actual": 70
+      },
+      {
+        "name": "internet-facing findings >= 1",
+        "passed": true,
+        "actual": 1
+      }
+    ],
+    "passed": true
+  },
+  {
+    "scenario": "scenario-3-critical",
+    "label": "Critical (unremediated)",
+    "expected": "Health below 40, at least one attack path",
+    "health_score": 11,
+    "raw_findings": 538,
+    "actionable": 147,
+    "reduction_pct": 72.7,
+    "clusters": 1,
+    "critical": 6,
+    "high": 130,
+    "runtime_seconds": 44.6,
+    "checks": [
+      {
+        "name": "health 0-39",
+        "passed": true,
+        "actual": 11
+      },
+      {
+        "name": "clusters >= 1",
+        "passed": true,
+        "actual": 1
+      }
+    ],
+    "passed": true
+  }
+]

@@ -1,0 +1,13 @@
+{
+  "scanned_at": "2026-08-03T16:55:23Z",
+  "account": "194722404383",
+  "region": "ap-southeast-1",
+  "status": "ok",
+  "checks_run": [
+    "ec2",
+    "sg",
+    "s3",
+    "iam"
+  ],
+  "findings": []
+}

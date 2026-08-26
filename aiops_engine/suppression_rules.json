@@ -1,0 +1,39 @@
+{
+  "rules": [
+    {
+      "id": "sup-acb6de8b",
+      "created_at": "2026-08-03T18:40:03Z",
+      "created_by": "security-analyst",
+      "reason": "Test fixtures and mock data, not real credentials",
+      "active": true,
+      "source": "gitleaks",
+      "resource_pattern": "test/*"
+    },
+    {
+      "id": "sup-fc1d3a65",
+      "created_at": "2026-08-26T13:52:08Z",
+      "created_by": "dashboard",
+      "reason": "just this one",
+      "active": false,
+      "cve_id": "CVE-2025-57349"
+    },
+    {
+      "id": "sup-d63ad569",
+      "created_at": "2026-08-26T13:56:30Z",
+      "created_by": "dashboard",
+      "reason": "and this one",
+      "active": false,
+      "source": "sonarqube",
+      "resource_pattern": "threatweave-demo:server.ts:682"
+    },
+    {
+      "id": "sup-8caff027",
+      "created_at": "2026-08-26T13:56:43Z",
+      "created_by": "dashboard",
+      "reason": "and this as well",
+      "active": false,
+      "source": "sonarqube",
+      "resource_pattern": "threatweave-demo:server.ts:682"
+    }
+  ]
+}

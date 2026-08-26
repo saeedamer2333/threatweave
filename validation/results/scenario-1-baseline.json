@@ -1,0 +1,228 @@
+{
+  "run_id": "scenario-1-baseline",
+  "generated_at": "2026-08-23T10:01:35Z",
+  "health_score": 97,
+  "summary": {
+    "raw_findings": 12,
+    "after_dedup": 6,
+    "reduction_pct": 50.0,
+    "clusters": 0,
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 6,
+    "suppressed": 0
+  },
+  "suppressions": [],
+  "clusters": [],
+  "findings": [
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "LOW",
+      "title": "7 vulnerabilities in libc6 (most severe: CVE-2019-1010022)",
+      "affected_resource": "bkimminich/juice-shop:latest (debian 13.5) / libc6-2.41-12+deb13u3",
+      "description": "GNU Libc current is affected by: Mitigation bypass. The impact is: Attacker may bypass stack guard protection. The component is: nptl. The attack vector is: Exploit stack buffer overflow vulnerability and use this bypass vulnerability to bypass stack guard. NOTE: Upstream comments indicate \"this is being treated as a non-security bug and no real threat.",
+      "cve_id": "CVE-2019-1010022",
+      "cvss_score": 9.8,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [
+        "CVE-2019-1010022",
+        "CVE-2019-1010023",
+        "CVE-2018-20796",
+        "CVE-2019-9192",
+        "CVE-2019-1010024",
+        "CVE-2019-1010025",
+        "CVE-2010-4756"
+      ],
+      "merged_count": 7,
+      "fix_version": null,
+      "id": "f-84628f19",
+      "risk_score": 56,
+      "scores": {
+        "P_RF": 0.56,
+        "S_retrieval": 0.74,
+        "S_asset": 0.6,
+        "S_EPSS": 0.03
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "7 vulnerabilities affect bkimminich/juice-shop:latest (debian 13.5) / libc6-2.41-12+deb13u3; the most severe is CVE-2019-1010022 (CVSS 9.8), a low issue. A single upgrade of this package clears all 7, so treat it as one action rather than 7 separate tickets."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "LOW",
+      "title": "lodash: Prototype pollution in utilities function",
+      "affected_resource": "Node.js / lodash-2.4.2",
+      "description": "lodash node module before 4.17.5 suffers from a Modification of Assumed-Immutable Data (MAID) vulnerability via defaultsDeep, merge, and mergeWith functions, which allows a malicious user to modify the prototype of \"Object\" via __proto__, causing the addition or modification of an existing property that will exist on all objects.",
+      "cve_id": "CVE-2018-3721",
+      "cvss_score": 6.5,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-5dcaca08",
+      "risk_score": 55,
+      "scores": {
+        "P_RF": 0.53,
+        "S_retrieval": 0.77,
+        "S_asset": 0.6,
+        "S_EPSS": 0.02
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2018-3721 (CVSS 6.5) is a low vulnerability affecting Node.js / lodash-2.4.2. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "LOW",
+      "title": "messageformat has a prototype pollution vulnerability",
+      "affected_resource": "Node.js / messageformat-2.3.0",
+      "description": "The messageformat package, an implementation of the Unicode MessageFormat 2 specification for JavaScript, is vulnerable to prototype pollution due to improper handling of message key paths in versions prior to 2.3.0. The flaw arises when processing nested message keys containing special characters (e.g., __proto__ ), which can lead to unintended modification of the JavaScript Object prototype. This vulnerability may allow a remote attacker to inject properties into the global object prototype via specially crafted message input, potentially causing denial of service or other undefined behaviors in applications using the affected component.",
+      "cve_id": "CVE-2025-57349",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-38d5e11c",
+      "risk_score": 55,
+      "scores": {
+        "P_RF": 0.52,
+        "S_retrieval": 0.77,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2025-57349 is a low vulnerability affecting Node.js / messageformat-2.3.0. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "LOW",
+      "title": "@tootallnate/once: @tootallnate/once: Denial of Service due to incorrect control flow scoping with AbortSignal",
+      "affected_resource": "Node.js / @tootallnate/once-1.1.2",
+      "description": "Versions of the package @tootallnate/once before 3.0.1 are vulnerable to Incorrect Control Flow Scoping in promise resolving when AbortSignal option is used. The Promise remains in a permanently pending state after the signal is aborted, causing any await or .then() usage to hang indefinitely. This can cause a control-flow leak that can lead to stalled requests, blocked workers, or degraded application availability.",
+      "cve_id": "CVE-2026-3449",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-ebd4949a",
+      "risk_score": 51,
+      "scores": {
+        "P_RF": 0.48,
+        "S_retrieval": 0.69,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2026-3449 is a low vulnerability affecting Node.js / @tootallnate/once-1.1.2. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "LOW",
+      "title": "body-parser: body-parser: Denial of Service via invalid limit option",
+      "affected_resource": "Node.js / body-parser-1.20.5",
+      "description": "Impact: In body-parser versions prior to 1.20.6 (1.x line) and 2.3.0 (2.x line), when the parser is configured with an invalid limit option value such as an unparseable string or NaN, bytes.parse returns null and the request body size check is silently skipped. Applications that rely on limit as their primary safeguard against oversized request bodies will accept arbitrarily large payloads, leading to excessive memory and CPU usage and denial of service. Patches: This issue is fixed in body-parser 1.20.6 and 2.3.0. After the fix, invalid limit values throw a clear error at parser construction time instead of silently disabling enforcement, while null and undefined continue to fall back to the default limit of 100kb. Workarounds: Validate the limit value before passing it to body-parser. For example, parse the value at startup and reject any configuration where the result is null or a non-finite number.",
+      "cve_id": "CVE-2026-12590",
+      "cvss_score": 5.9,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-3e40acda",
+      "risk_score": 49,
+      "scores": {
+        "P_RF": 0.45,
+        "S_retrieval": 0.68,
+        "S_asset": 0.6,
+        "S_EPSS": 0.0
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2026-12590 (CVSS 5.9) is a low vulnerability affecting Node.js / body-parser-1.20.5. Upgrade the package to a fixed version and redeploy."
+    },
+    {
+      "source": "trivy",
+      "type": "VULNERABILITY",
+      "severity": "LOW",
+      "title": "cookie: cookie accepts cookie name, path, and domain with out of bounds characters",
+      "affected_resource": "Node.js / cookie-0.4.2",
+      "description": "cookie is a basic HTTP cookie parser and serializer for HTTP servers. The cookie name could be used to set other fields of the cookie, resulting in an unexpected cookie value. A similar escape can be used for path and domain, which could be abused to alter other fields of the cookie. Upgrade to 0.7.0, which updates the validation for name, path, and domain.",
+      "cve_id": "CVE-2024-47764",
+      "cvss_score": null,
+      "rule_id": null,
+      "environment": "production",
+      "internet_facing": false,
+      "reachable_via_exposure": false,
+      "reported_by": [
+        "trivy"
+      ],
+      "related_cves": [],
+      "merged_count": 1,
+      "fix_version": null,
+      "id": "f-d9a66b0d",
+      "risk_score": 46,
+      "scores": {
+        "P_RF": 0.41,
+        "S_retrieval": 0.62,
+        "S_asset": 0.6,
+        "S_EPSS": 0.01
+      },
+      "confidence": "Needs Analyst Review",
+      "cluster_id": null,
+      "explanation": "CVE-2024-47764 is a low vulnerability affecting Node.js / cookie-0.4.2. Upgrade the package to a fixed version and redeploy."
+    }
+  ],
+  "history": [
+    {
+      "run_id": "scenario-1-baseline",
+      "generated_at": "2026-08-23T10:01:35Z",
+      "health_score": 97,
+      "raw_findings": 12,
+      "after_dedup": 6,
+      "reduction_pct": 50.0,
+      "suppressed": 0,
+      "clusters": 0,
+      "critical": 0,
+      "high": 0
+    }
+  ]
+}

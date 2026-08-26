@@ -1,0 +1,2 @@
+# Test dependencies only - not needed at runtime or in the Jenkins image.
+pytest>=8.0

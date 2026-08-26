@@ -1,0 +1,61 @@
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Docker's embedded DNS. A `proxy_pass` to a literal/static hostname is
+    # resolved once at config-load time - if that host does not exist yet
+    # (a standalone `docker run` with no "api" on the network), nginx refuses
+    # to start at all and the whole container exits. Routing the target
+    # through a variable instead defers resolution to request time, so the
+    # container starts either way and only /api/ requests 502 until a real
+    # backend is reachable.
+    # resolver_timeout: on a plain `docker run` with no --network (the
+    # default bridge), 127.0.0.11 has nothing listening on it at all - it
+    # only serves DNS on Docker's own user-defined/compose networks - so an
+    # unresolvable API_TARGET would otherwise hang for minutes rather than
+    # failing fast into a 502.
+    resolver 127.0.0.11 valid=30s ipv6=off;
+    resolver_timeout 3s;
+
+    # Single-page app: unknown paths fall through to index.html so client-side
+    # routing works on a hard refresh.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Same-origin API. The frontend calls /api/... and nginx forwards to the
+    # API container, so the browser never makes a cross-origin request.
+    #
+    # API_TARGET is substituted at container start (this file is processed by
+    # the base nginx image's built-in docker-entrypoint.d/20-envsubst...
+    # script because it lives under /etc/nginx/templates/ and ends in
+    # .template - only names that are real environment variables get
+    # substituted, so nginx's own $host/$remote_addr/etc below are untouched).
+    # Defaults to api:4000 for docker-compose; override for a standalone
+    # `docker run` where that hostname does not resolve.
+    location /api/ {
+        # A variable-based proxy_pass (needed for lazy DNS resolution, see
+        # above) does not do the automatic prefix-rewrite a static one does,
+        # so the exact request path has to be forwarded explicitly. Prefix
+        # and target both being /api/ means this is a transparent passthrough
+        # anyway - no stripping needed, same behaviour as the static form.
+        set $upstream_api http://${API_TARGET};
+        proxy_pass $upstream_api$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # An engine run can take a while; do not cut it off.
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+}

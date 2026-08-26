@@ -158,6 +158,49 @@ docker compose --profile sast up -d    # SonarQube for SAST (needs ~3GB RAM)
 docker compose --profile demo up -d    # Juice Shop as a local scan target
 ```
 
+### Option 3 — plain `docker run` (no compose, no clone)
+
+All three images are published to Docker Hub (`saeedalameri/threatweave-{api,dashboard,jenkins}`),
+and `docker-compose.yml` pulls them via `image:` rather than building from
+source. The API and dashboard images are genuinely standalone — the Python
+engine is baked into the API image rather than relying on a bind mount, and
+the dashboard's nginx config resolves its API target at container start, not
+at build time:
+
+```bash
+docker run -d -p 4000:4000 saeedalameri/threatweave-api:latest
+docker run -d -p 3000:80   saeedalameri/threatweave-dashboard:latest
+```
+
+That's it — no `.env`, no clone, no volumes. The API starts with the bundled
+sample findings (`aiops_engine/sample_inputs/`) already baked in, so
+`POST /api/scan` produces a real result immediately. Point the dashboard at a
+different API host with `-e API_TARGET=host:port` (default `api:4000`, which
+only resolves inside a compose network — that's the one thing this mode
+doesn't give you for free).
+
+Persist real results across restarts with a volume:
+
+```bash
+docker run -d -p 4000:4000 -v threatweave-findings:/app/findings saeedalameri/threatweave-api:latest
+```
+
+**Jenkins is the one piece that can't fully work this way.** The pipeline
+launches scanners as sibling containers via the mounted Docker socket, and
+those containers' volume mounts are resolved by the *host* daemon using real
+host paths (see [`HOST_WORKSPACE` — why it exists](#host_workspace--why-it-exists)
+below) — so running the Jenkins image standalone starts Jenkins itself fine,
+but the `threatweave-pipeline` job needs an actual checkout on the host to
+scan anything:
+
+```bash
+docker run -d -p 8080:8080 -p 50000:50000 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e HOST_WORKSPACE=/absolute/path/to/threatweave/implementation \
+  -v /absolute/path/to/threatweave/implementation:/workspace \
+  saeedalameri/threatweave-jenkins:latest
+```
+
 ### Running pieces directly
 
 ```bash

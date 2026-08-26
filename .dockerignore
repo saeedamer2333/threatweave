@@ -1,0 +1,24 @@
+# Applies to the api build context (implementation/), which was widened
+# from dashboard/backend so the image could bake in aiops_engine/ and
+# aws_monitor/. Keeps the build fast and avoids sending anything sensitive
+# or irrelevant as build context.
+
+.git/
+.env
+.env.local
+
+**/node_modules/
+**/dist/
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+
+demo-app/
+findings/**/*.json
+!findings/.gitkeep
+!findings/scan-inputs/.gitkeep
+
+jenkins/
+dashboard/frontend/
+docs/
+validation/scenarios/

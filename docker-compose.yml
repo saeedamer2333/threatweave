@@ -15,6 +15,7 @@ services:
   jenkins:
     build:
       context: ./jenkins
+    image: saeedalameri/threatweave-jenkins:latest
     container_name: threatweave-jenkins
     restart: unless-stopped
     ports:
@@ -68,7 +69,9 @@ services:
 
   api:
     build:
-      context: ./dashboard/backend
+      context: .
+      dockerfile: dashboard/backend/Dockerfile
+    image: saeedalameri/threatweave-api:latest
     container_name: threatweave-api
     restart: unless-stopped
     ports:
@@ -95,7 +98,13 @@ services:
       args:
         # Same-origin /api is proxied to the API service by nginx.
         VITE_API_TARGET: http://api:4000
+    image: saeedalameri/threatweave-dashboard:latest
     container_name: threatweave-dashboard
+    environment:
+      # nginx proxy target, substituted into the config at container start
+      # (see nginx.conf.template) - override for a standalone `docker run`
+      # where "api" doesn't resolve on a compose network.
+      API_TARGET: api:4000
     restart: unless-stopped
     ports:
       - "3000:80"

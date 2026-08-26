@@ -1,7 +1,9 @@
-# Applies to the api build context (implementation/), which was widened
-# from dashboard/backend so the image could bake in aiops_engine/ and
-# aws_monitor/. Keeps the build fast and avoids sending anything sensitive
-# or irrelevant as build context.
+# Applies to every build whose context is implementation/ (the api image
+# and the all-in-one Dockerfile both build from here) - excludes only what
+# no build ever needs: build artifacts, caches, and anything sensitive.
+# Do not exclude jenkins/ or dashboard/frontend/ here - the all-in-one
+# Dockerfile needs both from this same context, even though the narrower
+# api image does not.
 
 .git/
 .env
@@ -18,7 +20,5 @@ findings/**/*.json
 !findings/.gitkeep
 !findings/scan-inputs/.gitkeep
 
-jenkins/
-dashboard/frontend/
 docs/
 validation/scenarios/

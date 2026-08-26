@@ -158,7 +158,7 @@ docker compose --profile sast up -d    # SonarQube for SAST (needs ~3GB RAM)
 docker compose --profile demo up -d    # Juice Shop as a local scan target
 ```
 
-### Option 3 — plain `docker run` (no compose, no clone)
+### Option 3 — plain `docker run`, split images (no compose, no clone)
 
 All three images are published to Docker Hub (`saeedalameri/threatweave-{api,dashboard,jenkins}`),
 and `docker-compose.yml` pulls them via `image:` rather than building from
@@ -200,6 +200,64 @@ docker run -d -p 8080:8080 -p 50000:50000 \
   -v /absolute/path/to/threatweave/implementation:/workspace \
   saeedalameri/threatweave-jenkins:latest
 ```
+
+### Option 4 — all-in-one (single container)
+
+Jenkins, the API and the dashboard as three processes in one container
+(`supervisord`-managed), published as `saeedalameri/threatweave:latest` and
+built from the root [`Dockerfile`](Dockerfile). One command, fully
+configured through environment variables — the pattern GitLab CE's
+all-in-one image uses:
+
+```bash
+docker run -d --name threatweave \
+  -p 3000:80 -p 4000:4000 -p 8080:8080 -p 50000:50000 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v threatweave-jenkins-home:/var/jenkins_home \
+  -v threatweave-findings:/workspace/findings \
+  saeedalameri/threatweave:latest
+```
+
+Dashboard on `:3000`, API directly on `:4000`, Jenkins on `:8080` — all
+reachable immediately, and `POST /api/scan` (or clicking "Run scan" in the
+dashboard) works out of the box against the baked-in sample findings, same
+as the split API image. Both volumes are optional but recommended: without
+them, Jenkins configuration and scan history reset on every container
+recreation.
+
+Everything below is a real environment variable this image reads — set
+whichever apply with `-e NAME=value`:
+
+| Variable | Default | Controls |
+|---|---|---|
+| `JENKINS_ADMIN_ID` | `admin` | Jenkins login username |
+| `JENKINS_ADMIN_PASSWORD` | `admin` | Jenkins login password — **change this for anything but local use** |
+| `SONAR_HOST_URL` | unset | SonarQube server for the SAST stage (run one separately and point here to enable it) |
+| `SONAR_TOKEN` | unset | SonarQube analysis token, paired with the above |
+| `PORT` | `4000` | Port the API process listens on inside the container |
+| `PYTHON_BIN` | `python3` | Interpreter the API shells out to for the engine |
+| `FINDINGS_DIR` / `AIOPS_OUTPUT` / `HISTORY_FILE` | under `/workspace/findings` | Where the engine reads/writes its output |
+| `ENGINE_DIR` / `AWS_MONITOR` | under `/workspace` | Where the API finds the Python engine and AWS monitor scripts |
+
+AWS credentials: mount `~/.aws` read-only (`-v ~/.aws:/root/.aws:ro`) rather
+than setting keys as environment variables — the dashboard's Settings page
+only ever *reports* what Boto3 already resolved, matching the project's "no
+credentials in the product" posture described below.
+
+**Scanning your own project in this mode** works the same way as the split
+setup, just via bind mounts instead of `.env`: mount your project read-only
+at `/target` (`-v /path/to/project:/target:ro`) and set `HOST_WORKSPACE` to
+this image's own project checkout path on the host if you want the Jenkins
+pipeline to actually run — see the trade-off note below and
+[`HOST_WORKSPACE` — why it exists](#host_workspace--why-it-exists).
+
+**The honest trade-off**, stated in the Dockerfile too: one container means
+one thing to restart for any change, and Jenkins' need for host-level
+Docker-socket access now sits in the same container as the web-facing
+dashboard/API rather than isolated on its own. Prefer Option 2/3
+(docker-compose or the split images) for independent restarts, smaller
+per-service images, or that isolation; use this option when a single
+`docker run` matters more than either.
 
 ### Running pieces directly
 
@@ -289,6 +347,9 @@ reproducible, and incapable of inventing a CVE or a fix.
 implementation/
 ├── Jenkinsfile              6-stage pipeline (scanners -> engine -> publish)
 ├── docker-compose.yml       Jenkins, API, dashboard (+ sast/demo profiles)
+├── Dockerfile               all-in-one image (Option 4) - all 3 processes, 1 container
+├── supervisord.conf         process manager config for the all-in-one image
+├── nginx-allinone.conf      dashboard nginx config for the all-in-one image
 ├── .env.example             HOST_WORKSPACE and Jenkins credentials
 ├── aiops_engine/            the contribution
 │   ├── engine.py            orchestrates the seven stages

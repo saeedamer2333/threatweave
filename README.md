@@ -203,11 +203,10 @@ docker run -d -p 8080:8080 -p 50000:50000 \
 
 ### Option 4 — all-in-one (single container)
 
-Jenkins, the API and the dashboard as three processes in one container
-(`supervisord`-managed), published as `saeedalameri/threatweave:latest` and
-built from the root [`Dockerfile`](Dockerfile). One command, fully
-configured through environment variables — the pattern GitLab CE's
-all-in-one image uses:
+Jenkins, the API and the dashboard as three processes in one container,
+published as `saeedalameri/threatweave:latest` and built from the root
+[`Dockerfile`](Dockerfile). One command, fully configured through
+environment variables — the pattern GitLab CE's all-in-one image uses:
 
 ```bash
 docker run -d --name threatweave \
@@ -348,7 +347,6 @@ implementation/
 ├── Jenkinsfile              6-stage pipeline (scanners -> engine -> publish)
 ├── docker-compose.yml       Jenkins, API, dashboard (+ sast/demo profiles)
 ├── Dockerfile               all-in-one image (Option 4) - all 3 processes, 1 container
-├── supervisord.conf         process manager config for the all-in-one image
 ├── nginx-allinone.conf      dashboard nginx config for the all-in-one image
 ├── .env.example             HOST_WORKSPACE and Jenkins credentials
 ├── aiops_engine/            the contribution

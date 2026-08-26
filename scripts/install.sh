@@ -2,7 +2,7 @@
 #
 # ThreatWeave installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/<owner>/threatweave/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/saeedamer2333/threatweave/main/scripts/install.sh | bash
 #
 # Checks prerequisites, fetches the project, writes a .env with the host path
 # the pipeline needs, and starts the stack. Nothing is installed on the host
@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-REPO_URL="${THREATWEAVE_REPO:-https://github.com/saeed-alameri/threatweave.git}"
+REPO_URL="${THREATWEAVE_REPO:-https://github.com/saeedamer2333/threatweave.git}"
 INSTALL_DIR="${THREATWEAVE_DIR:-$HOME/threatweave}"
 BRANCH="${THREATWEAVE_BRANCH:-main}"
 

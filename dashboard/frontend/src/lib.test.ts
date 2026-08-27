@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { healthLabel, dirGlob, filterFindings } from './lib';
+import { healthLabel, dirGlob, filterFindings, formatElapsed } from './lib';
 import type { Finding } from './types';
 
 function finding(overrides: Partial<Finding> = {}): Finding {
@@ -51,6 +51,22 @@ describe('dirGlob', () => {
 
   it('handles a resource with no directory separator', () => {
     expect(dirGlob('README.md')).toBe('README.md*');
+  });
+});
+
+describe('formatElapsed', () => {
+  it('shows seconds only under a minute', () => {
+    expect(formatElapsed(8_000)).toBe('8s');
+    expect(formatElapsed(59_000)).toBe('59s');
+  });
+
+  it('shows minutes and seconds once past a minute', () => {
+    expect(formatElapsed(60_000)).toBe('1m 0s');
+    expect(formatElapsed(222_000)).toBe('3m 42s');
+  });
+
+  it('clamps negative/invalid elapsed time to 0s rather than showing something nonsensical', () => {
+    expect(formatElapsed(-500)).toBe('0s');
   });
 });
 

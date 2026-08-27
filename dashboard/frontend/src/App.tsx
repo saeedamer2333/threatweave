@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { AiopsOutput, Finding, Cluster, HistoryPoint, Suppression, SourceStatus } from './types';
 import { api, type PipelineStatus, type NewSuppression, type AwsStatus, type AppSettings } from './api';
-import { healthLabel, dirGlob, filterFindings } from './lib';
+import { healthLabel, dirGlob, filterFindings, formatElapsed } from './lib';
 import './App.css';
 
 type View = 'overview' | 'findings' | 'clusters' | 'history' | 'settings';
@@ -54,6 +54,20 @@ export default function App() {
     }
   };
 
+  // A ticking clock for "how long has this taken so far", independent of
+  // the 2s status poll - shows real elapsed time rather than jumping only
+  // when a poll happens to land.
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!scanInFlight) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [scanInFlight]);
+
+  const elapsedLabel = scanInFlight && scan?.startedAt
+    ? formatElapsed(now - new Date(scan.startedAt).getTime())
+    : null;
+
   return (
     <div className="shell">
       <aside className="sidebar">
@@ -84,7 +98,7 @@ export default function App() {
         <div className="side-foot">
           <button className="scan-btn" onClick={runScan} disabled={scanInFlight}>
             {scanInFlight ? (
-              <><span className="spinner" /> {scan?.state === 'queued' ? 'Queued…' : 'Scanning…'}</>
+              <><span className="spinner" /> {scan?.state === 'queued' ? 'Queued…' : 'Scanning…'} {elapsedLabel && <span className="scan-elapsed">{elapsedLabel}</span>}</>
             ) : (
               <>
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -94,6 +108,9 @@ export default function App() {
               </>
             )}
           </button>
+          {scanInFlight && scan?.currentActivity && (
+            <span className="scan-activity" title={scan.currentActivity}>{scan.currentActivity}</span>
+          )}
           {scan?.state === 'failed' && <span className="scan-err">Scan failed</span>}
           {scan?.buildNumber && <span className="run-chip">Build #{scan.buildNumber}</span>}
           {data && <span className="run-chip">Run {data.run_id}</span>}
@@ -122,7 +139,9 @@ function ScanFailureBanner({ scan, onDismiss }: { scan: PipelineStatus; onDismis
   // A stall timeout is a distinct case worth explaining differently: the
   // dashboard lost track of the build, but Jenkins itself may still be
   // working - that is not the same as the pipeline having actually failed.
-  const stalled = scan.error?.startsWith('Lost contact with Jenkins');
+  // Two different stalls read differently: queued-too-long (never started)
+  // vs. running-with-no-new-output (started, then went quiet).
+  const stalled = /^(Lost contact with Jenkins|No new output from the build)/.test(scan.error ?? '');
   return (
     <div className="scan-fail-banner">
       <div className="scan-fail-icon">

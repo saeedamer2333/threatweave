@@ -77,6 +77,7 @@ export interface PipelineStatus {
   startedAt?: string;
   finishedAt?: string;
   error?: string;
+  currentActivity?: string;
 }
 
 export const api = {

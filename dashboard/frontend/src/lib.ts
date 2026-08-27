@@ -7,6 +7,16 @@ export function healthLabel(score: number): { text: string; cls: string } {
   return { text: 'Critical', cls: 'bad' };
 }
 
+/** Milliseconds since a scan started -> "3m 42s" / "8s", for the live elapsed
+ * timer next to "Run scan". Negative/invalid input (clock skew, not started
+ * yet) clamps to 0s rather than showing something nonsensical like "-4s". */
+export function formatElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
+
 /** "test/foo/bar.js:12" -> "test/foo/*" so a suppression rule covers the directory. */
 export function dirGlob(resource: string): string {
   const noLine = resource.replace(/:\d+$/, '');

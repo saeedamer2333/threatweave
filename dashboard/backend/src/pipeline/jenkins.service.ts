@@ -16,18 +16,28 @@ const JENKINS_URL = (process.env.JENKINS_URL ?? 'http://127.0.0.1:8080').replace
 const JOB_NAME = 'threatweave-pipeline';
 
 /** Per-request timeout, so one hung connection fails fast rather than
- * hanging indefinitely - a long-lived process's pooled HTTP connection can
- * go bad after a network blip (observed in practice: Jenkins itself was
- * healthy again, but the API's own connection to it was not, and kept
- * retrying into the same dead connection). */
+ * hanging indefinitely. */
 const POLL_TIMEOUT_MS = 8_000;
+const QUEUE_POLL_MS = 2_000;
+const CONSOLE_POLL_MS = 3_000;
 
-/** Give up and report failure if no successful response has been seen for
- * this long, rather than polling silently forever. Without this, the only
- * symptom of a stuck connection is the dashboard sitting on "Scanning..."
- * with no indication anything is wrong - worse than the crash it's
- * protecting against, since a crash is at least visible. */
-const STALL_LIMIT_MS = 90_000;
+/** While queued (no build number yet, no console to check), a stall can
+ * only be measured by "did Jenkins answer at all" - three minutes of that
+ * failing genuinely means something is wrong, since going from queued to
+ * running should not itself take long once an executor is free. */
+const QUEUE_STALL_LIMIT_MS = 3 * 60_000;
+
+/** Once running, a build can legitimately go a while between console lines
+ * under CPU contention (observed in practice: SonarQube parsing ~1000
+ * TypeScript files on a loaded host made the *status* endpoint slow enough
+ * to trip a flat 90s "no response" rule, even though the build's own
+ * console was advancing the whole time). Progress is measured by new
+ * console output instead of by whether one particular HTTP call answered
+ * quickly, so a slow-but-genuinely-working build is not mistaken for a
+ * stuck one; 5 minutes with *zero* new output is a much more reliable
+ * "actually stuck" signal (the real stuck-SonarQube incident this was
+ * built to catch went 13+ minutes with no new lines at all). */
+const RUNNING_STALL_LIMIT_MS = 5 * 60_000;
 
 export interface PipelineStatus {
   state: 'idle' | 'queued' | 'running' | 'success' | 'failed';
@@ -36,6 +46,10 @@ export interface PipelineStatus {
   startedAt?: string;
   finishedAt?: string;
   error?: string;
+  /** Most recent line of real output from the build - not just "running",
+   * but what it is actually doing right now (e.g. which scanner, which
+   * file). Only present while a build is actively running. */
+  currentActivity?: string;
 }
 
 @Injectable()
@@ -50,10 +64,23 @@ export class JenkinsService {
     return 'Basic ' + Buffer.from(`${id}:${password}`).toString('base64');
   }
 
+  /**
+   * `Connection: close` on every request, deliberately trading a little
+   * per-request overhead for never reusing a pooled connection. Confirmed
+   * live, twice: this long-running process's default keep-alive connection
+   * to Jenkins can go stale after a network blip (or, apparently, just under
+   * heavy CPU load elsewhere on the host) and then fail on every subsequent
+   * request with a generic "fetch failed" - while a brand-new process making
+   * the identical call to the identical URL succeeds immediately. The
+   * AbortSignal timeout and stall-detection above turn that into a visible,
+   * actionable failure instead of an infinite silent retry, but they were
+   * still symptom management; this addresses the actual cause by never
+   * letting a connection live long enough to go stale in the first place.
+   */
   private fetchJenkins(url: string, init: RequestInit = {}): Promise<Response> {
     return fetch(url, {
       ...init,
-      headers: { Authorization: this.auth(), ...init.headers },
+      headers: { Authorization: this.auth(), Connection: 'close', ...init.headers },
       signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
     });
   }
@@ -190,58 +217,83 @@ export class JenkinsService {
         }
       } catch (err) {
         this.logger.warn(`Queue poll failed: ${(err as Error).message}`);
-        this.giveUpIfStalled(lastContactAt, startedAt);
+        if (Date.now() - lastContactAt >= QUEUE_STALL_LIMIT_MS) {
+          this.stopPolling();
+          const minutes = Math.round(QUEUE_STALL_LIMIT_MS / 60_000);
+          this.status = {
+            state: 'failed', startedAt, finishedAt: new Date().toISOString(),
+            error: `Lost contact with Jenkins while queued - no response for over ${minutes} minute(s). Check that Jenkins is reachable at ${JENKINS_URL}.`,
+          };
+        }
       }
-    }, 2000);
+    }, QUEUE_POLL_MS);
   }
 
+  /**
+   * Once a build is running, progress is tracked via its *console output*
+   * (Jenkins' progressiveText log API) rather than the structured status
+   * endpoint alone - both because it gives a genuine "what is it doing
+   * right now" signal for the UI, and because it is a far more reliable
+   * stall indicator than "did this one status check respond in time": a
+   * CPU-heavy stage (SonarQube parsing hundreds of files) can legitimately
+   * make individual HTTP calls slow without the build itself being stuck.
+   */
   private pollBuild(buildNumber: number, buildUrl: string, startedAt: string): void {
-    let lastContactAt = Date.now();
+    let consoleOffset = 0;
+    let lastProgressAt = Date.now();
 
     this.pollTimer = setInterval(async () => {
       try {
-        const res = await this.fetchJenkins(`${buildUrl}api/json`);
-        lastContactAt = Date.now();
-        if (!res.ok) return;
-        const body = (await res.json()) as { building: boolean; result: string | null };
-        if (!body.building) {
-          this.stopPolling();
-          this.status = {
-            state: body.result === 'SUCCESS' ? 'success' : 'failed',
-            startedAt,
-            finishedAt: new Date().toISOString(),
-            buildNumber,
-            buildUrl,
-            ...(body.result !== 'SUCCESS' ? { error: `Build result: ${body.result}` } : {}),
-          };
+        const res = await this.fetchJenkins(`${buildUrl}logText/progressiveText?start=${consoleOffset}`);
+        if (res.ok) {
+          const chunk = await res.text();
+          const nextOffset = Number(res.headers.get('X-Text-Size') ?? consoleOffset);
+          const moreData = res.headers.get('X-More-Data') === 'true';
+          consoleOffset = Number.isFinite(nextOffset) ? nextOffset : consoleOffset;
+
+          if (chunk.trim()) {
+            lastProgressAt = Date.now();
+            const activity = latestLine(chunk);
+            if (activity) this.status = { ...this.status, currentActivity: activity };
+          }
+
+          if (!moreData) {
+            // The console is done, but only the structured endpoint carries
+            // the actual pass/fail result.
+            const statusRes = await this.fetchJenkins(`${buildUrl}api/json`);
+            const body = statusRes.ok
+              ? ((await statusRes.json()) as { result: string | null })
+              : { result: null };
+            this.stopPolling();
+            this.status = {
+              state: body.result === 'SUCCESS' ? 'success' : 'failed',
+              startedAt,
+              finishedAt: new Date().toISOString(),
+              buildNumber,
+              buildUrl,
+              ...(body.result !== 'SUCCESS' ? { error: `Build result: ${body.result ?? 'unknown'}` } : {}),
+            };
+            return;
+          }
         }
       } catch (err) {
-        this.logger.warn(`Build poll failed: ${(err as Error).message}`);
-        this.giveUpIfStalled(lastContactAt, startedAt, buildNumber, buildUrl);
+        this.logger.warn(`Build console poll failed: ${(err as Error).message}`);
       }
-    }, 3000);
-  }
 
-  /** Stop retrying and report a clear, actionable failure once contact has
-   * genuinely been lost for a while - rather than an unbounded silent retry
-   * loop the dashboard has no way to distinguish from "still working". */
-  private giveUpIfStalled(lastContactAt: number, startedAt: string, buildNumber?: number, buildUrl?: string): void {
-    const stalledFor = Date.now() - lastContactAt;
-    if (stalledFor < STALL_LIMIT_MS) return;
-
-    this.stopPolling();
-    const minutes = Math.round(STALL_LIMIT_MS / 60_000);
-    this.status = {
-      state: 'failed',
-      startedAt,
-      finishedAt: new Date().toISOString(),
-      ...(buildNumber ? { buildNumber, buildUrl } : {}),
-      error: `Lost contact with Jenkins - no response for over ${minutes} minute(s). ` +
-        (buildUrl
-          ? `The build itself may still be running; check ${buildUrl} directly.`
-          : `Check that Jenkins is reachable at ${JENKINS_URL}.`),
-    };
-    this.logger.error(`Gave up polling after ${Math.round(stalledFor / 1000)}s with no response from Jenkins`);
+      if (Date.now() - lastProgressAt >= RUNNING_STALL_LIMIT_MS) {
+        this.stopPolling();
+        const minutes = Math.round(RUNNING_STALL_LIMIT_MS / 60_000);
+        this.status = {
+          state: 'failed',
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          buildNumber,
+          buildUrl,
+          error: `No new output from the build for over ${minutes} minute(s) - it may be stuck. The build itself may still be running; check ${buildUrl} directly.`,
+        };
+        this.logger.error(`Gave up on build #${buildNumber}: no new console output for ${minutes}+ minutes`);
+      }
+    }, CONSOLE_POLL_MS);
   }
 
   private stopPolling(): void {
@@ -250,4 +302,14 @@ export class JenkinsService {
       this.pollTimer = undefined;
     }
   }
+}
+
+/** The last non-blank line of a console chunk, with Jenkins' timestamp
+ * prefix (from the `timestamps()` pipeline option) stripped, trimmed to a
+ * reasonable length for a one-line UI display. */
+function latestLine(chunk: string): string | null {
+  const lines = chunk.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return null;
+  const last = lines[lines.length - 1].replace(/^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z]\s*/, '');
+  return last.length > 160 ? `${last.slice(0, 160)}…` : last;
 }

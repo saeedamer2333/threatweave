@@ -69,11 +69,20 @@ export interface HistoryPoint {
   health_score: number;
 }
 
+export interface SourceStatus {
+  source: string;
+  file: string;
+  status: 'ok' | 'missing' | 'error';
+  findings: number;
+  detail?: string;
+}
+
 export interface AiopsOutput {
   run_id: string;
   generated_at: string;
   health_score: number;
   summary: Summary;
+  sources?: SourceStatus[];
   clusters: Cluster[];
   findings: Finding[];
   history?: HistoryPoint[];

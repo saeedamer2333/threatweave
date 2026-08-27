@@ -86,4 +86,28 @@ describe('api', () => {
       body: JSON.stringify({ region: 'ap-southeast-1' }),
     }));
   });
+
+  it('runPipeline sends a POST to /api/pipeline/run', async () => {
+    const fetchMock = mockFetchOnce(200, { state: 'queued' });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await api.runPipeline();
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/pipeline/run', expect.objectContaining({
+      method: 'POST',
+    }));
+    expect(result).toEqual({ state: 'queued' });
+  });
+
+  it('getPipelineStatus calls GET /api/pipeline/status', async () => {
+    const fetchMock = mockFetchOnce(200, { state: 'running', buildNumber: 7 });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await api.getPipelineStatus();
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/pipeline/status', expect.objectContaining({
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    expect(result).toEqual({ state: 'running', buildNumber: 7 });
+  });
 });

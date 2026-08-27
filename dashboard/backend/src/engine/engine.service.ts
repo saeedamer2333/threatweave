@@ -1,5 +1,6 @@
 import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { spawn } from 'child_process';
+import { join } from 'path';
 import { PATHS } from '../config/paths';
 
 export type RunState = 'idle' | 'running' | 'success' | 'failed';
@@ -36,7 +37,18 @@ export class EngineService {
     const startedAt = new Date();
     this.status = { state: 'running', startedAt: startedAt.toISOString(), log: [] };
 
-    this.run(PATHS.python, ['engine.py'], PATHS.engineDir)
+    // engine.py's own defaults are the bundled *sample* fixtures, meant for
+    // running the engine standalone with no real scan having happened yet.
+    // Without these explicit paths, "Run scan" would silently re-score the
+    // demo data instead of the real findings/scan-inputs/, overwriting a
+    // genuine run's results with sample output and giving no indication
+    // anything had gone wrong.
+    this.run(PATHS.python, [
+      'engine.py',
+      '--input', join(PATHS.findingsDir, 'scan-inputs'),
+      '--output', PATHS.aiopsOutput,
+      '--history', PATHS.history,
+    ], PATHS.engineDir)
       .then(() => {
         const finished = new Date();
         this.status = {

@@ -88,6 +88,13 @@ services:
       SUPPRESSION_RULES: /data/aiops_engine/suppression_rules.json
       AWS_MONITOR: /data/aws_monitor/monitor.py
       PYTHON_BIN: python3
+      # Lets the dashboard's "Run scan" trigger the real Jenkins pipeline
+      # (see dashboard/backend/src/pipeline/) rather than only re-scoring
+      # whatever is already in findings/scan-inputs/. Same credentials the
+      # jenkins service above is configured with.
+      JENKINS_URL: http://jenkins:8080
+      JENKINS_ADMIN_ID: ${JENKINS_ADMIN_ID:-admin}
+      JENKINS_ADMIN_PASSWORD: ${JENKINS_ADMIN_PASSWORD:-admin}
     volumes:
       - .:/data
       - ${HOME}/.aws:/root/.aws:ro

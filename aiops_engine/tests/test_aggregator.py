@@ -20,16 +20,16 @@ def test_load_all_reads_every_present_report(tmp_path):
         {"Description": "key", "RuleID": "r1", "File": "a.ts", "StartLine": 1}
     ])
 
-    findings = aggregator.load_all(tmp_path)
+    findings, sources = aggregator.load_all(tmp_path)
 
-    sources = {f.source for f in findings}
-    assert sources == {"trivy", "gitleaks"}
+    result_sources = {f.source for f in findings}
+    assert result_sources == {"trivy", "gitleaks"}
     assert len(findings) == 2
 
 
 def test_load_all_skips_missing_reports_without_error(tmp_path):
     # No report files written at all.
-    findings = aggregator.load_all(tmp_path)
+    findings, sources = aggregator.load_all(tmp_path)
     assert findings == []
 
 
@@ -44,7 +44,7 @@ def test_load_all_dispatches_each_source_to_its_own_normaliser(tmp_path):
         {"check": "sg_open", "severity": "HIGH", "detail": "d", "resource": "sg-1"}
     ]})
 
-    findings = aggregator.load_all(tmp_path)
+    findings, sources = aggregator.load_all(tmp_path)
 
     assert {f.source for f in findings} == {"sonarqube", "checkov", "aws"}
 
@@ -53,5 +53,55 @@ def test_load_all_accepts_a_string_path_as_well_as_a_path_object(tmp_path):
     _write(tmp_path, "gitleaks-report.json", [
         {"Description": "key", "RuleID": "r1", "File": "a.ts", "StartLine": 1}
     ])
-    findings = aggregator.load_all(str(tmp_path))
+    findings, sources = aggregator.load_all(str(tmp_path))
     assert len(findings) == 1
+
+
+# ---- source status: what actually reaches the dashboard about each source ---
+
+def test_source_status_reports_ok_with_a_finding_count(tmp_path):
+    _write(tmp_path, "trivy-report.json", {"Results": [{"Target": "t", "Vulnerabilities": [
+        {"VulnerabilityID": "CVE-1", "PkgName": "p", "InstalledVersion": "1.0", "Severity": "high"},
+        {"VulnerabilityID": "CVE-2", "PkgName": "p", "InstalledVersion": "1.0", "Severity": "high"},
+    ]}]})
+
+    _, sources = aggregator.load_all(tmp_path)
+
+    trivy = next(s for s in sources if s["source"] == "trivy")
+    assert trivy == {"source": "trivy", "file": "trivy-report.json", "status": "ok", "findings": 2}
+
+
+def test_source_status_reports_missing_for_a_report_that_was_never_produced(tmp_path):
+    # Nothing written - simulates SonarQube not configured, or a scanner
+    # stage that failed before it could write its report.
+    _, sources = aggregator.load_all(tmp_path)
+
+    assert len(sources) == 5  # all five known sources are always reported on
+    assert all(s["status"] == "missing" and s["findings"] == 0 for s in sources)
+
+
+def test_source_status_reports_error_for_a_malformed_report_without_crashing_the_run(tmp_path):
+    (tmp_path / "checkov-report.json").write_text("{not valid json", encoding="utf-8")
+
+    findings, sources = aggregator.load_all(tmp_path)
+
+    checkov = next(s for s in sources if s["source"] == "checkov")
+    assert checkov["status"] == "error"
+    assert "detail" in checkov
+    # The corrupt source contributes nothing, but does not raise and does
+    # not prevent other sources' findings from coming through.
+    assert findings == []
+
+
+def test_source_status_error_on_one_report_does_not_affect_other_sources(tmp_path):
+    (tmp_path / "checkov-report.json").write_text("{not valid json", encoding="utf-8")
+    _write(tmp_path, "trivy-report.json", {"Results": [{"Target": "t", "Vulnerabilities": [
+        {"VulnerabilityID": "CVE-1", "PkgName": "p", "InstalledVersion": "1.0", "Severity": "high"}
+    ]}]})
+
+    findings, sources = aggregator.load_all(tmp_path)
+
+    assert len(findings) == 1
+    by_source = {s["source"]: s["status"] for s in sources}
+    assert by_source["checkov"] == "error"
+    assert by_source["trivy"] == "ok"

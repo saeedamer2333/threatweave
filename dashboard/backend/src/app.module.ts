@@ -7,6 +7,8 @@ import { EngineController } from './engine/engine.controller';
 import { EngineService } from './engine/engine.service';
 import { SettingsController } from './settings/settings.controller';
 import { SettingsService } from './settings/settings.service';
+import { PipelineController } from './pipeline/pipeline.controller';
+import { JenkinsService } from './pipeline/jenkins.service';
 
 @Module({
   controllers: [
@@ -14,12 +16,14 @@ import { SettingsService } from './settings/settings.service';
     SuppressionsController,
     EngineController,
     SettingsController,
+    PipelineController,
   ],
   providers: [
     FindingsService,
     SuppressionsService,
     EngineService,
     SettingsService,
+    JenkinsService,
   ],
 })
 export class AppModule {}

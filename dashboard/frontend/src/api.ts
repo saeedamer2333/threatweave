@@ -54,10 +54,29 @@ export interface NewSuppression {
   title_pattern?: string;
 }
 
+export interface PipelineSettings {
+  sourceDir: string;
+  iacDir: string;
+  targetImage: string;
+  sonarProjectKey: string;
+  runAwsMonitor: boolean;
+  failOnCritical: boolean;
+}
+
 export interface AppSettings {
   awsRegion: string;
   checks: { ec2: boolean; sg: boolean; s3: boolean; iam: boolean };
   scanIntervalMinutes: number;
+  pipeline: PipelineSettings;
+}
+
+export interface PipelineStatus {
+  state: 'idle' | 'queued' | 'running' | 'success' | 'failed';
+  buildNumber?: number;
+  buildUrl?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  error?: string;
 }
 
 export const api = {
@@ -72,6 +91,8 @@ export const api = {
     request<Suppression>(`/suppressions/${id}`, { method: 'DELETE' }),
   startScan: () => request<ScanStatus>('/scan', { method: 'POST' }),
   getScanStatus: () => request<ScanStatus>('/scan/status'),
+  runPipeline: () => request<PipelineStatus>('/pipeline/run', { method: 'POST' }),
+  getPipelineStatus: () => request<PipelineStatus>('/pipeline/status'),
   getAwsStatus: () => request<AwsStatus>('/aws/status'),
   runAwsScan: (region?: string) =>
     request<{ ok: boolean; log: string[] }>('/aws/scan', {

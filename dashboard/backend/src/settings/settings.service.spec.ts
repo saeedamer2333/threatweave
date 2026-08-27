@@ -31,7 +31,25 @@ describe('SettingsService', () => {
         awsRegion: '',
         checks: { ec2: true, sg: true, s3: true, iam: true },
         scanIntervalMinutes: 30,
+        pipeline: {
+          sourceDir: '/target/juice-shop',
+          iacDir: '/workspace/infra',
+          targetImage: 'bkimminich/juice-shop:latest',
+          sonarProjectKey: 'threatweave-demo',
+          runAwsMonitor: true,
+          failOnCritical: false,
+        },
       });
+    });
+
+    it('merges an older settings file missing the pipeline block entirely', async () => {
+      mockExistsSync.mockReturnValue(true);
+      // Simulates a settings.json written before pipeline settings existed.
+      mockReadFile.mockResolvedValue(JSON.stringify({ awsRegion: 'eu-west-1' }) as never);
+
+      const settings = await service.get();
+      expect(settings.pipeline.sourceDir).toBe('/target/juice-shop');
+      expect(settings.pipeline.targetImage).toBe('bkimminich/juice-shop:latest');
     });
 
     it('merges a saved settings file over the defaults', async () => {
@@ -91,6 +109,23 @@ describe('SettingsService', () => {
       const result = await service.update({ checks: { s3: false } as never });
 
       expect(result.checks).toEqual({ ec2: true, sg: true, s3: false, iam: true });
+    });
+
+    it('merges the nested pipeline object rather than replacing it wholesale', async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockResolvedValue(JSON.stringify({
+        pipeline: {
+          sourceDir: '/target/juice-shop', iacDir: '/workspace/infra',
+          targetImage: 'bkimminich/juice-shop:latest', sonarProjectKey: 'threatweave-demo',
+          runAwsMonitor: true, failOnCritical: false,
+        },
+      }) as never);
+      mockWriteFile.mockResolvedValue(undefined as never);
+
+      const result = await service.update({ pipeline: { sourceDir: '/target/my-app' } as never });
+
+      expect(result.pipeline.sourceDir).toBe('/target/my-app');
+      expect(result.pipeline.targetImage).toBe('bkimminich/juice-shop:latest'); // untouched
     });
 
     it('persists the merged result to disk', async () => {

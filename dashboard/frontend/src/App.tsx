@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import type { AiopsOutput, Finding, Cluster, HistoryPoint, Suppression } from './types';
-import { api, type ScanStatus, type NewSuppression, type AwsStatus, type AppSettings } from './api';
+import type { AiopsOutput, Finding, Cluster, HistoryPoint, Suppression, SourceStatus } from './types';
+import { api, type PipelineStatus, type NewSuppression, type AwsStatus, type AppSettings } from './api';
 import { healthLabel, dirGlob, filterFindings } from './lib';
 import './App.css';
 
@@ -18,7 +18,7 @@ export default function App() {
   const [data, setData] = useState<AiopsOutput | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<View>('overview');
-  const [scan, setScan] = useState<ScanStatus | null>(null);
+  const [scan, setScan] = useState<PipelineStatus | null>(null);
 
   const load = useCallback(() => {
     api.getFindings()
@@ -28,24 +28,27 @@ export default function App() {
 
   useEffect(() => { load(); }, [load]);
 
-  // While a scan is running, poll until it settles, then reload the results.
+  // "Run scan" triggers the real Jenkins pipeline (scanners -> engine), not
+  // just a re-score of old data - queued and running both need polling,
+  // since a build can sit queued for a moment before an executor picks it up.
+  const scanInFlight = scan?.state === 'queued' || scan?.state === 'running';
   useEffect(() => {
-    if (scan?.state !== 'running') return;
+    if (!scanInFlight) return;
     const timer = setInterval(async () => {
       try {
-        const status = await api.getScanStatus();
+        const status = await api.getPipelineStatus();
         setScan(status);
-        if (status.state !== 'running') load();
+        if (status.state === 'success' || status.state === 'failed') load();
       } catch {
         clearInterval(timer);
       }
-    }, 1500);
+    }, 2000);
     return () => clearInterval(timer);
-  }, [scan?.state, load]);
+  }, [scanInFlight, load]);
 
   const runScan = async () => {
     try {
-      setScan(await api.startScan());
+      setScan(await api.runPipeline());
     } catch (e) {
       setError((e as Error).message);
     }
@@ -79,9 +82,9 @@ export default function App() {
         </nav>
 
         <div className="side-foot">
-          <button className="scan-btn" onClick={runScan} disabled={scan?.state === 'running'}>
-            {scan?.state === 'running' ? (
-              <><span className="spinner" /> Scanning…</>
+          <button className="scan-btn" onClick={runScan} disabled={scanInFlight}>
+            {scanInFlight ? (
+              <><span className="spinner" /> {scan?.state === 'queued' ? 'Queued…' : 'Scanning…'}</>
             ) : (
               <>
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -91,7 +94,8 @@ export default function App() {
               </>
             )}
           </button>
-          {scan?.state === 'failed' && <span className="scan-err">Scan failed</span>}
+          {scan?.state === 'failed' && <span className="scan-err" title={scan.error}>Scan failed</span>}
+          {scan?.buildNumber && <span className="run-chip">Build #{scan.buildNumber}</span>}
           {data && <span className="run-chip">Run {data.run_id}</span>}
         </div>
       </aside>
@@ -137,6 +141,7 @@ function Content({ view, data, onGoto, onReload }: {
     return (
       <>
         {header('Overview', 'Security posture for the latest pipeline run')}
+        {data.sources && <DataSources sources={data.sources} />}
         <section className="grid">
           <div className={`card health ${health.cls}`}>
             <span className="card-label">Health Score</span>
@@ -457,6 +462,9 @@ function SettingsPanel({ data, onReload }: { data: AiopsOutput; onReload: () => 
         </div>
       )}
 
+      {/* Pipeline target */}
+      {settings && <PipelineTargetCard settings={settings} save={save} saving={saving} />}
+
       {/* Suppressions */}
       <div className="card set-card">
         <div className="set-head">
@@ -488,6 +496,152 @@ function SettingsPanel({ data, onReload }: { data: AiopsOutput; onReload: () => 
         )}
       </div>
     </div>
+  );
+}
+
+/* ---------- Pipeline target: what "Run scan" actually scans ---------- */
+function PipelineTargetCard({ settings, save, saving }: {
+  settings: AppSettings; save: (patch: Partial<AppSettings>) => void; saving: boolean;
+}) {
+  const p = settings.pipeline;
+  // Text fields save on blur, not every keystroke - a partial path mid-edit
+  // shouldn't hit the API on each character.
+  const [draft, setDraft] = useState(p);
+  useEffect(() => { setDraft(p); }, [p]);
+
+  const saveField = (key: keyof typeof p, value: string | boolean) =>
+    save({ pipeline: { ...p, [key]: value } as never });
+
+  return (
+    <div className="card set-card">
+      <div className="set-head">
+        <h3>Pipeline target</h3>
+        <span className="stat-sub">what "Run scan" actually scans</span>
+      </div>
+      <p className="set-note" style={{ marginTop: 0, marginBottom: 16 }}>
+        These map directly to the Jenkins job's own parameters — editing them
+        here changes what the next "Run scan" click passes in, nothing more.
+        Container-internal paths only work if the target is mounted at that
+        path when the container starts (see the README's "Scanning your own
+        project" section).
+      </p>
+
+      <label className="set-row">
+        <span className="set-label">Source directory</span>
+        <input
+          className="set-input"
+          value={draft.sourceDir}
+          onChange={(e) => setDraft({ ...draft, sourceDir: e.target.value })}
+          onBlur={() => draft.sourceDir !== p.sourceDir && saveField('sourceDir', draft.sourceDir)}
+          placeholder="/target"
+        />
+      </label>
+
+      <label className="set-row">
+        <span className="set-label">IaC directory</span>
+        <input
+          className="set-input"
+          value={draft.iacDir}
+          onChange={(e) => setDraft({ ...draft, iacDir: e.target.value })}
+          onBlur={() => draft.iacDir !== p.iacDir && saveField('iacDir', draft.iacDir)}
+          placeholder="/target/infra"
+        />
+      </label>
+
+      <label className="set-row">
+        <span className="set-label">Container image</span>
+        <input
+          className="set-input"
+          value={draft.targetImage}
+          onChange={(e) => setDraft({ ...draft, targetImage: e.target.value })}
+          onBlur={() => draft.targetImage !== p.targetImage && saveField('targetImage', draft.targetImage)}
+          placeholder="scratch"
+        />
+      </label>
+
+      <label className="set-row">
+        <span className="set-label">SonarQube project key</span>
+        <input
+          className="set-input"
+          value={draft.sonarProjectKey}
+          onChange={(e) => setDraft({ ...draft, sonarProjectKey: e.target.value })}
+          onBlur={() => draft.sonarProjectKey !== p.sonarProjectKey && saveField('sonarProjectKey', draft.sonarProjectKey)}
+          placeholder="my-project"
+        />
+      </label>
+
+      <div className="set-row col">
+        <span className="set-label">Run options</span>
+        <div className="check-list">
+          <label className="check-item">
+            <input
+              type="checkbox"
+              checked={p.runAwsMonitor}
+              onChange={(e) => saveField('runAwsMonitor', e.target.checked)}
+            />
+            <span className="check-name">AWS MONITOR</span>
+            <span className="check-desc">Include live cloud governance checks in the run</span>
+          </label>
+          <label className="check-item">
+            <input
+              type="checkbox"
+              checked={p.failOnCritical}
+              onChange={(e) => saveField('failOnCritical', e.target.checked)}
+            />
+            <span className="check-name">FAIL ON CRITICAL</span>
+            <span className="check-desc">Fail the build when the health score comes back critical</span>
+          </label>
+        </div>
+      </div>
+
+      {saving && <span className="set-msg">Saving…</span>}
+    </div>
+  );
+}
+
+/* ---------- Data sources: what actually fed this run, and what didn't ---------- */
+const SOURCE_LABELS: Record<string, string> = {
+  trivy: 'Trivy (container)',
+  sonarqube: 'SonarQube (SAST)',
+  gitleaks: 'GitLeaks (secrets)',
+  checkov: 'Checkov (IaC)',
+  aws: 'AWS monitor (cloud)',
+};
+
+function DataSources({ sources }: { sources: SourceStatus[] }) {
+  const missingOrError = sources.filter((s) => s.status !== 'ok');
+  return (
+    <section className="block sources-block">
+      <div className="sources-row">
+        {sources.map((s) => (
+          <span
+            key={s.source}
+            className={`source-chip source-${s.status}`}
+            title={
+              s.status === 'ok' ? `${s.findings} findings`
+                : s.status === 'error' ? `Report was present but could not be read: ${s.detail ?? 'unknown error'}`
+                  : 'No report was produced for this run - the scanner may be disabled, not configured, or its stage failed'
+            }
+          >
+            <span className="source-dot" />
+            {SOURCE_LABELS[s.source] ?? s.source}
+            {s.status === 'ok' && <span className="source-count">{s.findings}</span>}
+            {s.status === 'missing' && <span className="source-reason">no report</span>}
+            {s.status === 'error' && <span className="source-reason">unreadable</span>}
+          </span>
+        ))}
+      </div>
+      {missingOrError.length > 0 && (
+        <p className="sources-note">
+          This run's numbers only reflect the sources marked above as having
+          findings - {missingOrError.map((s) => SOURCE_LABELS[s.source] ?? s.source).join(', ')} did
+          not contribute data to it. That is not necessarily a problem (SAST
+          is off unless <code>SONAR_HOST_URL</code> is set, for instance) but
+          it does mean the health score and finding counts below are based on
+          fewer than five sources this time.
+        </p>
+      )}
+    </section>
   );
 }
 

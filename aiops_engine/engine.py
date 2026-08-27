@@ -47,7 +47,7 @@ def run(input_dir: Path, output_file: Path,
     history_file = history_file or output_file.parent / "history.json"
     print("AIOps engine starting")
     print("1/6 aggregate + normalise")
-    raw = aggregator.load_all(input_dir)
+    raw, sources = aggregator.load_all(input_dir)
     raw_count = len(raw)
     print(f"      total raw findings: {raw_count}")
 
@@ -83,6 +83,7 @@ def run(input_dir: Path, output_file: Path,
         "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "health_score": health,
         "summary": {**summary, "suppressed": suppressed_count},
+        "sources": sources,
         "suppressions": suppressions,
         "clusters": clusters,
         "findings": [f.to_dict() for f in sorted(findings, key=_rank)],

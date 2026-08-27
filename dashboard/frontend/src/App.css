@@ -116,6 +116,29 @@
 .block-head h2, .block > h2 { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
 .link-btn { border: none; background: none; color: var(--brand); font-size: 13px; font-weight: 600; cursor: pointer; }
 
+/* ---------- Data sources ---------- */
+.sources-block { margin-bottom: 22px; }
+.sources-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.source-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-radius: 8px; font-size: 12px; font-weight: 600;
+  background: var(--surface); border: 1px solid var(--border); color: var(--text);
+  cursor: default;
+}
+.source-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.source-chip.source-ok .source-dot { background: var(--good); }
+.source-chip.source-missing .source-dot { background: var(--muted); }
+.source-chip.source-error .source-dot { background: var(--crit); }
+.source-chip.source-missing, .source-chip.source-error { color: var(--muted); font-weight: 500; }
+.source-chip.source-error { border-color: #f4c6c8; }
+.source-count { color: var(--muted); font-weight: 500; }
+.source-reason { color: var(--muted); font-weight: 500; font-style: italic; }
+.sources-note {
+  margin-top: 10px; font-size: 12px; line-height: 1.6; color: var(--muted);
+  padding: 10px 12px; background: #fdf6e3; border-left: 3px solid var(--med); border-radius: 6px;
+}
+.sources-note code { font-family: "SF Mono", ui-monospace, monospace; font-size: 11px; }
+
 /* ---------- Settings ---------- */
 .settings { display: flex; flex-direction: column; gap: 16px; }
 .set-card { padding: 22px 24px; gap: 16px; }

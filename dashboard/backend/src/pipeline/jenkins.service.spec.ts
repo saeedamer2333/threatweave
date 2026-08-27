@@ -40,14 +40,22 @@ describe('JenkinsService', () => {
     expect(service.getStatus()).toEqual({ state: 'idle' });
   });
 
-  it('refuses to trigger a second build while one is already in flight', async () => {
-    // No crumb issuer, trigger response never resolves within this test -
-    // just needs triggerBuild() to have set state to "queued" first.
-    fetchMock.mockImplementation(() => new Promise(() => {}));
+  it('is idempotent while a build is already in flight, rather than throwing', async () => {
+    // Regression: this used to throw a plain Error, which Nest's default
+    // exception filter turns into a bare 500 "Internal server error" with
+    // no useful detail reaching the dashboard - confirmed live when a
+    // second call landed while build #12 was still queued. Returning the
+    // current status instead means an accidental double-click, or a
+    // request while a build is genuinely still running, is harmless.
+    fetchMock.mockImplementation(() => new Promise(() => {})); // trigger never resolves
     void service.triggerBuild(SETTINGS);
     await Promise.resolve(); // let the first triggerBuild's synchronous part run
+    expect(service.getStatus().state).toBe('queued');
 
-    await expect(service.triggerBuild(SETTINGS)).rejects.toThrow('already in progress');
+    const second = await service.triggerBuild(SETTINGS);
+
+    expect(second).toEqual(service.getStatus());
+    expect(second.state).toBe('queued');
   });
 
   it('reports failed with a clear error when Jenkins is unreachable', async () => {

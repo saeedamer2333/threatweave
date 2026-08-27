@@ -94,7 +94,7 @@ export default function App() {
               </>
             )}
           </button>
-          {scan?.state === 'failed' && <span className="scan-err" title={scan.error}>Scan failed</span>}
+          {scan?.state === 'failed' && <span className="scan-err">Scan failed</span>}
           {scan?.buildNumber && <span className="run-chip">Build #{scan.buildNumber}</span>}
           {data && <span className="run-chip">Run {data.run_id}</span>}
         </div>
@@ -108,8 +108,49 @@ export default function App() {
           </div>
         )}
         {!error && !data && <div className="state">Loading findings…</div>}
+        {!error && data && scan?.state === 'failed' && (
+          <ScanFailureBanner scan={scan} onDismiss={() => setScan(null)} />
+        )}
         {data && <Content view={view} data={data} onGoto={setView} onReload={load} />}
       </main>
+    </div>
+  );
+}
+
+/* ---------- Scan failure: the real reason, not just "Scan failed" ---------- */
+function ScanFailureBanner({ scan, onDismiss }: { scan: PipelineStatus; onDismiss: () => void }) {
+  // A stall timeout is a distinct case worth explaining differently: the
+  // dashboard lost track of the build, but Jenkins itself may still be
+  // working - that is not the same as the pipeline having actually failed.
+  const stalled = scan.error?.startsWith('Lost contact with Jenkins');
+  return (
+    <div className="scan-fail-banner">
+      <div className="scan-fail-icon">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" />
+        </svg>
+      </div>
+      <div className="scan-fail-body">
+        <span className="scan-fail-title">
+          {stalled ? 'Lost track of the last scan' : 'The last scan attempt failed'}
+          {scan.buildNumber && <span className="scan-fail-build">Build #{scan.buildNumber}</span>}
+        </span>
+        <p className="scan-fail-detail">{scan.error ?? 'No further detail was reported.'}</p>
+        {stalled && (
+          <p className="scan-fail-note">
+            The data below is from the last successful run, not this attempt -
+            it has not been overwritten by anything.
+          </p>
+        )}
+      </div>
+      <div className="scan-fail-actions">
+        {scan.buildUrl && (
+          <a className="btn-ghost small" href={scan.buildUrl} target="_blank" rel="noreferrer">
+            View in Jenkins ↗
+          </a>
+        )}
+        <button className="btn-ghost small" onClick={onDismiss}>Dismiss</button>
+      </div>
     </div>
   );
 }
@@ -791,17 +832,30 @@ function scoreParts(f: Finding): ScorePart[] {
 const SEV_RANK: Record<string, number> = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1, INFO: 0 };
 const scoreBand = (n: number) => (n >= 80 ? 3 : n >= 50 ? 2 : n >= 25 ? 1 : 0);
 
-/** Plain-language note when the source tool's severity label and the
- * computed risk score point in different directions, so a "LOW" finding
- * scoring 52 doesn't read as a bug. */
-function reasoningNote(f: Finding): string | null {
+/** Plain-language note comparing the source tool's severity label to the
+ * computed risk score. Always returns something, even when the two roughly
+ * agree — a finding with nothing shown here used to be indistinguishable
+ * from one where the explanation was simply missing/broken; a same-numbered
+ * score can be a big surprise for one severity label and unremarkable for
+ * another (a CRITICAL landing at 47 is a steep drop; a LOW landing at 47 is
+ * a much smaller rise), so the "nothing unusual" case gets said explicitly
+ * rather than left to look like an omission. */
+function reasoningNote(f: Finding): { text: string; mismatch: boolean } {
   const sevBand = SEV_RANK[f.severity] ?? 2;
   const riskBand = scoreBand(f.risk_score);
+  const tools = f.reported_by.join('/');
   // LOW/INFO severity (band <=1) but a mid/high risk score (band >=2), or
   // the reverse: CRITICAL/HIGH severity but the score landed low.
   const higher = sevBand <= 1 && riskBand >= 2;
   const lower = sevBand >= 3 && riskBand <= 1;
-  if (!higher && !lower) return null;
+
+  if (!higher && !lower) {
+    return {
+      mismatch: false,
+      text: `${f.risk_score} is within the expected range for a ${tools}-reported "${f.severity}" ` +
+        `finding — nothing here points to a signal strong enough to move it notably higher or lower.`,
+    };
+  }
 
   const parts = scoreParts(f);
   const bySignal = (keys: string[]) =>
@@ -809,16 +863,21 @@ function reasoningNote(f: Finding): string | null {
   const textSignal = bySignal(['P_RF', 'S_retrieval']);
   const exposureSignal = bySignal(['S_asset', 'S_EPSS']);
 
-  const tools = f.reported_by.join('/');
   if (higher) {
-    return `ThreatWeave scored this higher than ${tools}'s own "${f.severity}" label because ` +
-      `${textSignal.label} rated the finding's text as ${(textSignal.v * 100).toFixed(0)}% likely severe, ` +
-      `independently of that label — the severity tag is what ${tools} reported, the ${f.risk_score} is ThreatWeave's own composite estimate. ` +
-      `${exposureSignal.label} is only ${(exposureSignal.v * 100).toFixed(0)}%, which is what keeps it from scoring even higher.`;
+    return {
+      mismatch: true,
+      text: `ThreatWeave scored this higher than ${tools}'s own "${f.severity}" label because ` +
+        `${textSignal.label} rated the finding's text as ${(textSignal.v * 100).toFixed(0)}% likely severe, ` +
+        `independently of that label — the severity tag is what ${tools} reported, the ${f.risk_score} is ThreatWeave's own composite estimate. ` +
+        `${exposureSignal.label} is only ${(exposureSignal.v * 100).toFixed(0)}%, which is what keeps it from scoring even higher.`,
+    };
   }
-  return `ThreatWeave scored this lower than ${tools}'s own "${f.severity}" label because the model and ` +
-    `retrieval signals did not find the finding's text to closely resemble known severe cases, and ` +
-    `${exposureSignal.label} is only ${(exposureSignal.v * 100).toFixed(0)}% — nothing here confirms it is reachable or actively exploited.`;
+  return {
+    mismatch: true,
+    text: `ThreatWeave scored this lower than ${tools}'s own "${f.severity}" label because the model and ` +
+      `retrieval signals did not find the finding's text to closely resemble known severe cases, and ` +
+      `${exposureSignal.label} is only ${(exposureSignal.v * 100).toFixed(0)}% — nothing here confirms it is reachable or actively exploited.`,
+  };
 }
 
 /* ---------- Risk score with breakdown tooltip ---------- */
@@ -859,7 +918,7 @@ function RiskReasoning({ f }: { f: Finding }) {
         </span>
       </div>
 
-      {note && <p className="reasoning-note">{note}</p>}
+      <p className={`reasoning-note ${note.mismatch ? '' : 'reasoning-note-plain'}`}>{note.text}</p>
 
       <div className="reasoning-bars">
         {parts.map((p) => (

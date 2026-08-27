@@ -78,10 +78,19 @@ export class JenkinsService {
    * Trigger a build and start tracking it. Returns immediately - the queue
    * item is not yet a real build number, so getStatus() reports "queued"
    * until the background poll resolves it to one.
+   *
+   * Idempotent while one is already active: returns the current status
+   * rather than throwing. It used to throw a plain Error here, which Nest's
+   * default exception filter turns into a bare 500 "Internal server error"
+   * with no detail - the one call in this service that did not honour the
+   * "always resolves to a status object" contract every other failure path
+   * here follows, and the one most likely to be hit by an accidental
+   * double-click or a repeated request while a build is genuinely still
+   * running.
    */
   async triggerBuild(settings: PipelineSettings): Promise<PipelineStatus> {
     if (this.status.state === 'queued' || this.status.state === 'running') {
-      throw new Error('A pipeline run is already in progress');
+      return this.status;
     }
 
     const startedAt = new Date().toISOString();

@@ -374,11 +374,21 @@ export class JenkinsService implements OnModuleInit {
     let consoleOffset = 0;
     let lastProgressAt = Date.now();
     let stallLoggedAt = 0;
-    // The four scanners run as parallel branches (see the Jenkinsfile), so
-    // more than one can genuinely be active at once - accumulated across
-    // the whole build rather than replaced each poll, so a fast scanner
-    // (Checkov, a few seconds) is not silently dropped from the list the
-    // moment a slower one (SonarQube, minutes) produces the next line.
+    // GitLeaks/Trivy/Checkov run as parallel branches of one 'Scans' stage
+    // (see the Jenkinsfile), so more than one can genuinely be active at
+    // once - accumulated within that stage rather than replaced on every
+    // poll, so a fast scanner (Checkov, a few seconds) is not silently
+    // dropped from the list the moment a slower one produces the next line.
+    // SonarQube, however, now runs afterward as its own dedicated stage
+    // (Tier 3: decoupled from the blocking parallel batch so the dashboard
+    // isn't stuck waiting on it) - its `[Pipeline] { (SAST - SonarQube)`
+    // marker carries no "Branch: " prefix, unlike a parallel branch's, and
+    // that distinction (see `solo` in allStagesWithPositions) is what tells
+    // this loop the previous batch has finished and should be cleared, not
+    // accumulated into. Without this, every scanner that ever ran this
+    // build stays "active" forever once SonarQube's stage starts (confirmed
+    // live: all four chips showed "scanning now" simultaneously long after
+    // GitLeaks/Trivy/Checkov had actually finished).
     const activeStages = new Set<string>();
 
     this.pollTimer = setInterval(async () => {
@@ -394,7 +404,10 @@ export class JenkinsService implements OnModuleInit {
             lastProgressAt = Date.now();
             const activity = latestLine(chunk);
             const stage = latestStage(chunk);
-            for (const name of allStages(chunk)) activeStages.add(name);
+            for (const marker of allStagesWithPositions(chunk)) {
+              if (marker.solo) activeStages.clear();
+              activeStages.add(marker.name);
+            }
             this.status = {
               ...this.status,
               stalled: false,
@@ -548,12 +561,17 @@ function latestStage(chunk: string): string | null {
   return all.length ? all[all.length - 1].name : null;
 }
 
-/** Every distinct scanner stage/branch touched anywhere in this chunk. */
-function allStages(chunk: string): string[] {
-  return [...new Set(allStagesWithPositions(chunk).map((m) => m.name))];
-}
-
-function allStagesWithPositions(chunk: string): { index: number; name: string }[] {
+/**
+ * Every stage/branch marker touched anywhere in this chunk, in the order
+ * they appeared, tagged with whether each is a `solo` (dedicated, sequential
+ * stage - e.g. `[Pipeline] { (SAST - SonarQube)`) or parallel-branch marker
+ * (`[Pipeline] { (Branch: Name)` or the `[Name] ...` line-prefix form). A
+ * caller accumulating "currently active" scanners needs this distinction:
+ * branch markers genuinely overlap and should pile up together, but a solo
+ * marker means a brand-new sequential stage has started and whatever ran
+ * before it is done.
+ */
+function allStagesWithPositions(chunk: string): { index: number; name: string; solo: boolean }[] {
   // Jenkins' parallel() step emits its own `[Pipeline] { (Branch: Name) }`
   // marker for each branch alongside the `[Name] ...` line-prefix form -
   // confirmed live (`"currentStage":"Branch: IaC - Checkov"`). Stripping the
@@ -561,9 +579,13 @@ function allStagesWithPositions(chunk: string): { index: number; name: string }[
   // match KNOWN_STAGES/STAGE_TO_SOURCE regardless of which of the two forms
   // produced it.
   const stageMarkers = [...chunk.matchAll(/\[Pipeline]\s*\{\s*\(([^)]+)\)/g)]
-    .map((m) => ({ index: m.index ?? 0, name: m[1].replace(/^Branch:\s*/, '') }));
+    .map((m) => {
+      const raw = m[1];
+      const isBranch = /^Branch:\s*/.test(raw);
+      return { index: m.index ?? 0, name: raw.replace(/^Branch:\s*/, ''), solo: !isBranch };
+    });
   const branchLines = [...chunk.matchAll(/^\[([^\]]+)]/gm)]
-    .map((m) => ({ index: m.index ?? 0, name: m[1] }))
+    .map((m) => ({ index: m.index ?? 0, name: m[1], solo: false }))
     .filter((m) => KNOWN_STAGES.includes(m.name));
   return [...stageMarkers, ...branchLines].sort((a, b) => a.index - b.index);
 }

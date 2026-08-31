@@ -277,6 +277,43 @@ describe('JenkinsService', () => {
     expect(status.activeStages).toEqual(expect.arrayContaining(['IaC - Checkov', 'SAST - SonarQube']));
   });
 
+  // ---- Regression: confirmed live after decoupling SonarQube into its own
+  // sequential stage (Tier 3) so the dashboard doesn't wait on it. GitLeaks/
+  // Trivy/Checkov still run as parallel branches of 'Scans' and should keep
+  // accumulating together, but once SonarQube's *own* dedicated stage starts
+  // - a solo `[Pipeline] { (SAST - SonarQube)` marker, not a `Branch: `
+  // one - the previous batch is done and must be cleared, not piled onto.
+  // Before this fix, all four scanners stayed "active" for the rest of the
+  // build the moment SonarQube's stage began, so the dashboard showed every
+  // chip as "scanning now" simultaneously long after three of them had
+  // actually finished.
+  it('clears previously-active parallel branches once a dedicated sequential stage starts', async () => {
+    fetchMock
+      .mockResolvedValueOnce(NO_CRUMB)
+      .mockResolvedValueOnce(TRIGGERED)
+      .mockResolvedValueOnce(QUEUE_RESOLVED)
+      .mockResolvedValueOnce(textResponse(
+        '[Pipeline] { (Branch: IaC - Checkov)\n[Pipeline] { (Branch: Secrets - GitLeaks)\n[Pipeline] { (Branch: Container - Trivy)\n',
+        { moreData: true, nextOffset: 90 },
+      ))
+      .mockResolvedValueOnce(textResponse(
+        '[Pipeline] { (SAST - SonarQube)\nSensor analysis\n',
+        { moreData: true, nextOffset: 140 },
+      ));
+
+    await service.triggerBuild(SETTINGS);
+    await jest.advanceTimersByTimeAsync(2000); // -> running
+    await jest.advanceTimersByTimeAsync(3000); // console poll 1: Scans branches
+
+    expect(service.getStatus().activeStages).toEqual(
+      expect.arrayContaining(['IaC - Checkov', 'Secrets - GitLeaks', 'Container - Trivy']),
+    );
+
+    await jest.advanceTimersByTimeAsync(3000); // console poll 2: SonarQube's own stage starts
+
+    expect(service.getStatus().activeStages).toEqual(['SAST - SonarQube']);
+  });
+
   // ---- Regression: the actual root cause behind every "fetch failed"
   // incident this service went through, found only after logging the real
   // underlying error instead of undici's generic wrapper message:

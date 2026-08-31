@@ -934,7 +934,11 @@ const STAGE_TO_SOURCE: Record<string, string> = {
   'Secrets - GitLeaks': 'gitleaks',
   'Container - Trivy': 'trivy',
   'IaC - Checkov': 'checkov',
-  'AIOps engine & dashboard update': 'aws',
+  // Tier 3 split the single AIOps stage into two (fast-scanners pass, then a
+  // final pass once SonarQube is done) - both still map to the AWS chip
+  // since the monitor call itself only happens in the first one.
+  'AIOps engine & dashboard update (fast scanners)': 'aws',
+  'AIOps engine & dashboard update (final)': 'aws',
 };
 
 function DataSources({ sources, scan, elapsedLabel }: {

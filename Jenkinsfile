@@ -99,6 +99,63 @@ def runScanner(String name, String expectedReport, Closure body) {
     }
 }
 
+/**
+ * Runs the AIOps engine over whatever reports exist in INPUT_DIR right now
+ * and updates the dashboard's output. Called twice per pipeline run (see
+ * the "AIOps engine & dashboard update" stages) - once right after the fast
+ * scanners (GitLeaks/Trivy/Checkov/AWS) finish, so the dashboard reflects
+ * real results in well under a minute instead of waiting on SonarQube, and
+ * again after SonarQube's own stage completes, to fold SAST in once it's
+ * actually ready. Both calls use the same --run-id, so the second run
+ * replaces rather than duplicates the first in history (history_tracker.py
+ * already dedupes on run_id) - the dashboard just sees the same run's
+ * numbers get more complete, not two separate builds.
+ */
+def runAiopsEngine(String phaseLabel) {
+    echo "Inputs collected for this run (${phaseLabel}):"
+    sh "ls -la ${INPUT_DIR} || true"
+    scanStatus.each { name, state -> echo "  ${name}: ${state}" }
+
+    sh """
+        cd ${ENGINE_DIR} && python3 engine.py \
+          --input ${INPUT_DIR} \
+          --output ${FINDINGS_DIR}/aiops-output.json \
+          --history ${FINDINGS_DIR}/history.json \
+          --first-seen ${FINDINGS_DIR}/first_seen.json \
+          --run-id build-${BUILD_NUMBER}
+    """
+
+    def out = readJSON file: "${FINDINGS_DIR}/aiops-output.json"
+    def s = out.summary
+
+    echo """
+    =============================================
+     ThreatWeave run ${out.run_id} (${phaseLabel})
+    =============================================
+     Health score      : ${out.health_score}/100
+     Raw findings      : ${s.raw_findings}
+     Actionable        : ${s.after_dedup}
+     Noise reduction   : ${s.reduction_pct}%
+     Suppressed        : ${s.suppressed ?: 0}
+     Attack paths      : ${s.clusters}
+     Critical / High   : ${s.critical} / ${s.high}
+    =============================================
+    """.stripIndent()
+
+    currentBuild.description =
+        "Health ${out.health_score} | ${s.after_dedup} findings | ${s.clusters} path(s)"
+
+    // The engine writes to the bind-mounted project directory, which is
+    // outside the job workspace, so copy it in first. Re-archiving on the
+    // second call is deliberate: it overwrites the fast-scanners-only
+    // artifact with the complete one, so anyone downloading it later gets
+    // the final picture, not the partial one.
+    sh "cp ${FINDINGS_DIR}/aiops-output.json ./aiops-output.json"
+    archiveArtifacts artifacts: 'aiops-output.json', allowEmptyArchive: true
+
+    return out
+}
+
 pipeline {
     agent any
 
@@ -213,100 +270,19 @@ pipeline {
         }
 
         /* 3 ----------------------------------------------------------- */
-        // The four scanners below are independent of each other - none reads
-        // another's output, they only all need to finish before stage 8
-        // correlates their reports. Run them concurrently rather than one
-        // after another: wall-clock time should drop from the *sum* of every
-        // stage's duration to roughly the *longest* one (SonarQube, which
-        // dominates completely - see its own comment below).
-        //
-        // CPU caps are deliberately uneven, not an equal split. An earlier
-        // version gave all four 1.5 CPUs each and measured *no* real
-        // improvement (SonarQube's own stage time barely changed, sometimes
-        // got worse) - taking cores away from the one scanner whose speed
-        // actually determines the total run time, to hand them to three
-        // scanners that finish in seconds to a few minutes regardless of how
-        // many cores they get, wasn't a trade worth making. SonarQube gets
-        // the lion's share (4 of the host's 8); GitLeaks/Trivy/Checkov get
-        // just enough to not be starved, since more would not make them
-        // meaningfully faster. Total commitment (6 of 8) still leaves
-        // headroom so Jenkins itself stays responsive under load, which is
-        // what the stall detector actually needs.
+        // These three scanners are independent of each other and all finish
+        // in seconds to a couple of minutes regardless of CPU share - run
+        // them concurrently so wall-clock time is roughly the slowest of the
+        // three, not their sum. SonarQube used to run in this same parallel
+        // block, capped to 4 CPUs specifically to leave room for these three
+        // - it now runs afterward, alone, in its own stage (see below),
+        // which is also why it can be given far more CPU than it could
+        // safely share here.
         stage('Scans') {
             when { expression { !skipRun } }
             steps {
                 script {
                     parallel(
-                        'SAST - SonarQube': {
-                            runScanner('SAST - SonarQube', "${INPUT_DIR}/sonarqube-report.json") {
-                                // Only runs when a SonarQube server is configured; the
-                                // engine treats a missing report as "not scanned".
-                                if (env.SONAR_HOST_URL?.trim()) {
-                                    // sonar.exclusions: the text/secrets sensor otherwise reads
-                                    // every file under sonar.sources as text regardless of
-                                    // language, including binaries - confirmed live, hundreds of
-                                    // "Invalid character encountered, please fix encoding"
-                                    // warnings for the demo target's own images/video/fonts,
-                                    // each one still costing real scan time for a file that has
-                                    // no source code to analyze in the first place.
-                                    sh """
-                                        docker run --rm --network ${SONAR_NETWORK} --cpus="4" \
-                                          -v "${toHostPath(params.SOURCE_DIR)}:/usr/src" \
-                                          -e SONAR_HOST_URL \
-                                          -e SONAR_TOKEN \
-                                          sonarsource/sonar-scanner-cli:latest \
-                                          -Dsonar.projectKey=${params.SONAR_PROJECT_KEY} \
-                                          -Dsonar.sources=/usr/src \
-                                          -Dsonar.scm.disabled=true \
-                                          -Dsonar.working.directory=/tmp/.scannerwork \
-                                          -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/build/**,**/coverage/**,**/*.min.js,**/screenshots/**,**/assets/private/**,**/*.{jpg,jpeg,png,gif,ico,svg,webp,avif,bmp,mp4,mov,webm,woff,woff2,ttf,eot,otf,pdf,zip}
-                                    """
-                                    // The scanner only SUBMITS the analysis; SonarQube
-                                    // processes it asynchronously on a background
-                                    // queue. Querying straight after "ANALYSIS
-                                    // SUCCESSFUL" returns an empty issue list for a
-                                    // project that in fact has findings, so wait for
-                                    // the queue to drain before reading results.
-                                    //
-                                    // set +x: Jenkins traces sh steps with -x, which
-                                    // would print the expanded token into the build
-                                    // log. The credential is read from the environment
-                                    // by the shell, never interpolated by Groovy.
-                                    sh """
-                                        set +x
-                                        echo 'Waiting for SonarQube to finish processing the analysis...'
-                                        settled=0
-                                        for i in \$(seq 1 120); do
-                                            st=\$(curl -sS -m 15 -u "\$SONAR_TOKEN:" \
-                                                "\$SONAR_HOST_URL/api/ce/activity_status?component=${params.SONAR_PROJECT_KEY}" \
-                                                2>/dev/null || echo '')
-                                            case "\$st" in
-                                                *'"pending":0'*'"inProgress":0'*)
-                                                    echo "  analysis processed after \$((i*5))s"
-                                                    settled=1; break ;;
-                                                *'Insufficient privileges'*)
-                                                    # A GLOBAL_ANALYSIS_TOKEN may submit an
-                                                    # analysis but not read the queue, so
-                                                    # polling would 403 until it gave up.
-                                                    echo "  WARNING: SONAR_TOKEN cannot read the analysis queue."
-                                                    echo "  Generate a USER_TOKEN instead of a GLOBAL_ANALYSIS_TOKEN,"
-                                                    echo "  otherwise results may be read before they are ready."
-                                                    settled=1; break ;;
-                                            esac
-                                            sleep 5
-                                        done
-                                        [ "\$settled" = 1 ] || echo "  WARNING: still processing after 10 min - results may be incomplete."
-
-                                        curl -sS -u "\$SONAR_TOKEN:" \
-                                          "\$SONAR_HOST_URL/api/issues/search?componentKeys=${params.SONAR_PROJECT_KEY}&types=VULNERABILITY&ps=500" \
-                                          -o ${INPUT_DIR}/sonarqube-report.json
-                                    """
-                                } else {
-                                    echo 'SONAR_HOST_URL not set - skipping SAST stage.'
-                                    scanStatus['SAST - SonarQube'] = 'skipped'
-                                }
-                            }
-                        },
                         'Secrets - GitLeaks': {
                             runScanner('Secrets - GitLeaks', "${INPUT_DIR}/gitleaks-report.json") {
                                 // GitLeaks rescans the *entire* git history by default (minutes,
@@ -406,14 +382,22 @@ pipeline {
         }
 
         /* 4 ----------------------------------------------------------- */
-        stage('AIOps engine & dashboard update') {
+        // Fast update: everything except SonarQube is already done by this
+        // point (seconds to a couple of minutes), so the dashboard reflects
+        // real GitLeaks/Trivy/Checkov/AWS results here rather than making
+        // every viewer wait on SonarQube's own several-minutes-long analysis
+        // before seeing anything at all. SonarQube results fold in later,
+        // in stage 6, once its own stage actually finishes.
+        stage('AIOps engine & dashboard update (fast scanners)') {
             when { expression { !skipRun } }
             steps {
                 script {
                     // The cloud governance monitor is a layer of its own rather
                     // than a pipeline stage - it runs on a schedule independently
-                    // of any build. It is invoked here so that a pipeline run has
-                    // current cloud findings to correlate the scan results against.
+                    // of any build. It is invoked here (once, not repeated in
+                    // stage 6) so that a pipeline run has current cloud findings
+                    // to correlate the scan results against, without querying
+                    // AWS a second time just because SonarQube runs later now.
                     runScanner('Cloud - AWS monitor', "${INPUT_DIR}/aws-findings.json") {
                         if (params.RUN_AWS_MONITOR) {
                             sh """
@@ -426,44 +410,109 @@ pipeline {
                         }
                     }
 
-                    echo 'Inputs collected for this run:'
-                    sh "ls -la ${INPUT_DIR} || true"
-                    scanStatus.each { name, state -> echo "  ${name}: ${state}" }
+                    runAiopsEngine('fast scanners only, SAST pending')
+                }
+            }
+        }
 
-                    sh """
-                        cd ${ENGINE_DIR} && python3 engine.py \
-                          --input ${INPUT_DIR} \
-                          --output ${FINDINGS_DIR}/aiops-output.json \
-                          --history ${FINDINGS_DIR}/history.json \
-                          --first-seen ${FINDINGS_DIR}/first_seen.json \
-                          --run-id build-${BUILD_NUMBER}
-                    """
+        /* 5 ----------------------------------------------------------- */
+        // Runs alone now, not sharing the host with GitLeaks/Trivy/Checkov -
+        // they have already finished and their containers have already
+        // exited by the time this stage starts. That is what makes a much
+        // higher CPU cap here safe: previously 4 was the ceiling specifically
+        // to leave room for three other scanners running at the same time;
+        // with nothing else competing for cores, 6 of the host's 8 can go to
+        // this one scanner (2 held back so Jenkins/Docker/OS stay
+        // responsive - the same safety margin the old split preserved,
+        // just no longer split three ways).
+        stage('SAST - SonarQube') {
+            when { expression { !skipRun } }
+            steps {
+                script {
+                    runScanner('SAST - SonarQube', "${INPUT_DIR}/sonarqube-report.json") {
+                        // Only runs when a SonarQube server is configured; the
+                        // engine treats a missing report as "not scanned".
+                        if (env.SONAR_HOST_URL?.trim()) {
+                            // sonar.exclusions: the text/secrets sensor otherwise reads
+                            // every file under sonar.sources as text regardless of
+                            // language, including binaries - confirmed live, hundreds of
+                            // "Invalid character encountered, please fix encoding"
+                            // warnings for the demo target's own images/video/fonts,
+                            // each one still costing real scan time for a file that has
+                            // no source code to analyze in the first place.
+                            sh """
+                                docker run --rm --network ${SONAR_NETWORK} --cpus="6" \
+                                  -v "${toHostPath(params.SOURCE_DIR)}:/usr/src" \
+                                  -e SONAR_HOST_URL \
+                                  -e SONAR_TOKEN \
+                                  sonarsource/sonar-scanner-cli:latest \
+                                  -Dsonar.projectKey=${params.SONAR_PROJECT_KEY} \
+                                  -Dsonar.sources=/usr/src \
+                                  -Dsonar.scm.disabled=true \
+                                  -Dsonar.working.directory=/tmp/.scannerwork \
+                                  -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/build/**,**/coverage/**,**/*.min.js,**/screenshots/**,**/assets/private/**,**/*.{jpg,jpeg,png,gif,ico,svg,webp,avif,bmp,mp4,mov,webm,woff,woff2,ttf,eot,otf,pdf,zip}
+                            """
+                            // The scanner only SUBMITS the analysis; SonarQube
+                            // processes it asynchronously on a background
+                            // queue. Querying straight after "ANALYSIS
+                            // SUCCESSFUL" returns an empty issue list for a
+                            // project that in fact has findings, so wait for
+                            // the queue to drain before reading results.
+                            //
+                            // set +x: Jenkins traces sh steps with -x, which
+                            // would print the expanded token into the build
+                            // log. The credential is read from the environment
+                            // by the shell, never interpolated by Groovy.
+                            sh """
+                                set +x
+                                echo 'Waiting for SonarQube to finish processing the analysis...'
+                                settled=0
+                                for i in \$(seq 1 120); do
+                                    st=\$(curl -sS -m 15 -u "\$SONAR_TOKEN:" \
+                                        "\$SONAR_HOST_URL/api/ce/activity_status?component=${params.SONAR_PROJECT_KEY}" \
+                                        2>/dev/null || echo '')
+                                    case "\$st" in
+                                        *'"pending":0'*'"inProgress":0'*)
+                                            echo "  analysis processed after \$((i*5))s"
+                                            settled=1; break ;;
+                                        *'Insufficient privileges'*)
+                                            # A GLOBAL_ANALYSIS_TOKEN may submit an
+                                            # analysis but not read the queue, so
+                                            # polling would 403 until it gave up.
+                                            echo "  WARNING: SONAR_TOKEN cannot read the analysis queue."
+                                            echo "  Generate a USER_TOKEN instead of a GLOBAL_ANALYSIS_TOKEN,"
+                                            echo "  otherwise results may be read before they are ready."
+                                            settled=1; break ;;
+                                    esac
+                                    sleep 5
+                                done
+                                [ "\$settled" = 1 ] || echo "  WARNING: still processing after 10 min - results may be incomplete."
 
-                    def out = readJSON file: "${FINDINGS_DIR}/aiops-output.json"
-                    def s = out.summary
+                                curl -sS -u "\$SONAR_TOKEN:" \
+                                  "\$SONAR_HOST_URL/api/issues/search?componentKeys=${params.SONAR_PROJECT_KEY}&types=VULNERABILITY&ps=500" \
+                                  -o ${INPUT_DIR}/sonarqube-report.json
+                            """
+                        } else {
+                            echo 'SONAR_HOST_URL not set - skipping SAST stage.'
+                            scanStatus['SAST - SonarQube'] = 'skipped'
+                        }
+                    }
+                }
+            }
+        }
 
-                    echo """
-                    =============================================
-                     ThreatWeave run ${out.run_id}
-                    =============================================
-                     Health score      : ${out.health_score}/100
-                     Raw findings      : ${s.raw_findings}
-                     Actionable        : ${s.after_dedup}
-                     Noise reduction   : ${s.reduction_pct}%
-                     Suppressed        : ${s.suppressed ?: 0}
-                     Attack paths      : ${s.clusters}
-                     Critical / High   : ${s.critical} / ${s.high}
-                    =============================================
-                    """.stripIndent()
-
-                    currentBuild.description =
-                        "Health ${out.health_score} | ${s.after_dedup} findings | ${s.clusters} path(s)"
-
-                    // The engine writes to the bind-mounted project directory,
-                    // which is outside the job workspace, so copy it in first.
-                    sh "cp ${FINDINGS_DIR}/aiops-output.json ./aiops-output.json"
-                    archiveArtifacts artifacts: 'aiops-output.json',
-                                     allowEmptyArchive: true
+        /* 6 ----------------------------------------------------------- */
+        // Final update: re-runs the engine now that SonarQube's report (or
+        // its absence) is known, folding SAST into the same run rather than
+        // starting a new one - runAiopsEngine reuses --run-id build-${BUILD_NUMBER}
+        // from stage 4, and history_tracker.py replaces that run's entry
+        // rather than duplicating it, so the dashboard sees this run's
+        // numbers become complete, not a second build appear.
+        stage('AIOps engine & dashboard update (final)') {
+            when { expression { !skipRun } }
+            steps {
+                script {
+                    def out = runAiopsEngine('complete, including SAST')
 
                     if (params.FAIL_ON_CRITICAL && out.health_score < 30) {
                         error "Health score ${out.health_score} is below the acceptable threshold"

@@ -12,39 +12,43 @@ from schema import Finding
 
 # ---------------------------------------------------------------------------
 # Keyword-based sub-type detection for code vulnerabilities (no CVE).
-# Each entry: (keywords, why, action)
+# Each entry: (keywords, kind, why, action). `kind` is a short, human label
+# for the dashboard's summary cards (e.g. "SQL Injection") - distinct from
+# `why`, the fuller sentence explaining the mechanism.
 # ---------------------------------------------------------------------------
-_CODE_PATTERNS: list[tuple[tuple[str, ...], str, str]] = [
-    (("sql", "injection"),
+_CODE_PATTERNS: list[tuple[tuple[str, ...], str, str, str]] = [
+    (("sql", "injection"), "SQL Injection",
      "user input reaches a database query without sanitisation, allowing SQL injection",
      "Use parameterised queries or an ORM so input can never alter query structure."),
-    (("xss", "cross-site", "cross site"),
+    (("xss", "cross-site", "cross site"), "Cross-Site Scripting (XSS)",
      "unescaped user input is rendered in the page, allowing cross-site scripting (XSS)",
      "Escape or encode all user-controlled output and apply a Content-Security-Policy."),
-    (("cors", "access-control-allow-origin", "any origin"),
+    (("cors", "access-control-allow-origin", "any origin"), "Permissive CORS Policy",
      "the CORS policy trusts any origin, letting untrusted sites call the API with credentials",
      "Restrict Access-Control-Allow-Origin to an explicit allow-list of trusted domains."),
-    (("path traversal", "directory traversal", "../"),
+    (("path traversal", "directory traversal", "../"), "Path Traversal",
      "user input is used in a file path, allowing directory traversal",
      "Canonicalise and validate paths against an allowed base directory."),
-    (("command", "os command", "rce", "remote code execution"),
+    (("command", "os command", "rce", "remote code execution"), "Command Injection",
      "user input reaches a system command, allowing command injection",
      "Avoid shelling out; if unavoidable, use argument arrays and strict allow-lists."),
-    (("deserial", "insecure deserialization"),
+    (("deserial", "insecure deserialization"), "Insecure Deserialization",
      "untrusted data is deserialised, which can lead to remote code execution",
      "Avoid native deserialisation of untrusted input; use a safe data format such as JSON with a schema."),
-    (("hardcoded", "hard-coded"),
+    (("hardcoded", "hard-coded"), "Hardcoded Credential",
      "a credential is embedded directly in source code",
      "Move the value to a secret manager and rotate the exposed credential."),
 ]
 
-# Secret rule id / description -> what the secret unlocks
-_SECRET_HINTS: list[tuple[tuple[str, ...], str]] = [
-    (("aws", "akia"), "grant direct access to the AWS account"),
-    (("stripe", "sk_live", "payment"), "allow fraudulent charges through the payment provider"),
-    (("github", "ghp_", "gitlab"), "grant write access to source repositories"),
-    (("private key", "-----begin"), "allow an attacker to impersonate the service"),
+# Secret rule id / description -> (kind, what the secret unlocks)
+_SECRET_HINTS: list[tuple[tuple[str, ...], str, str]] = [
+    (("aws", "akia"), "AWS Credential", "grant direct access to the AWS account"),
+    (("stripe", "sk_live", "payment"), "Payment API Key", "allow fraudulent charges through the payment provider"),
+    (("github", "ghp_", "gitlab"), "Source Control Token", "grant write access to source repositories"),
+    (("private key", "-----begin"), "Private Key", "allow an attacker to impersonate the service"),
 ]
+
+_SECRET_FIX = "Rotate the credential immediately and remove it from git history."
 
 
 def _match(text: str, keywords: tuple[str, ...]) -> bool:
@@ -52,71 +56,95 @@ def _match(text: str, keywords: tuple[str, ...]) -> bool:
     return any(k in t for k in keywords)
 
 
-def _explain_code_vuln(f: Finding) -> str:
+def _explain_code_vuln(f: Finding) -> tuple[str, str, str]:
+    """Returns (kind, narrative, fix)."""
     text = f"{f.title} {f.description}"
-    for keywords, why, action in _CODE_PATTERNS:
+    for keywords, kind, why, action in _CODE_PATTERNS:
         if _match(text, keywords):
-            return f"At {f.affected_resource}, {why}. {action}"
-    return f"{f.title} at {f.affected_resource}. Review and remediate before release."
+            return kind, f"At {f.affected_resource}, {why}. {action}", action
+    fix = "Review and remediate before release."
+    return "Code Vulnerability", f"{f.title} at {f.affected_resource}. {fix}", fix
 
 
-def _explain_cve(f: Finding) -> str:
+def _explain_cve(f: Finding) -> tuple[str, str, str]:
     exploited = f.scores.get("S_EPSS", 0) >= 0.9
     tail = " and is on public exploitation feeds, so treat it as urgent" if exploited else ""
     sev = f.severity.title()
     cvss = f" (CVSS {f.cvss_score})" if f.cvss_score is not None else ""
+    kind = "Known Vulnerability (CVE)"
 
     if f.merged_count > 1:
-        return (f"{f.merged_count} vulnerabilities affect {f.affected_resource}; the most "
-                f"severe is {f.cve_id}{cvss}, a {sev.lower()} issue{tail}. A single upgrade of "
-                f"this package clears all {f.merged_count}, so treat it as one action rather "
-                f"than {f.merged_count} separate tickets.")
+        fix = f"Upgrade this package - clears all {f.merged_count} CVEs at once."
+        narrative = (f"{f.merged_count} vulnerabilities affect {f.affected_resource}; the most "
+                     f"severe is {f.cve_id}{cvss}, a {sev.lower()} issue{tail}. A single upgrade of "
+                     f"this package clears all {f.merged_count}, so treat it as one action rather "
+                     f"than {f.merged_count} separate tickets.")
+        return kind, narrative, fix
 
-    return (f"{f.cve_id}{cvss} is a {sev.lower()} vulnerability affecting "
-            f"{f.affected_resource}{tail}. Upgrade the package to a fixed version and redeploy.")
+    fix = "Upgrade the package to a fixed version and redeploy."
+    narrative = (f"{f.cve_id}{cvss} is a {sev.lower()} vulnerability affecting "
+                 f"{f.affected_resource}{tail}. {fix}")
+    return kind, narrative, fix
 
 
-def _explain_secret(f: Finding) -> str:
+def _explain_secret(f: Finding) -> tuple[str, str, str]:
     text = f"{f.title} {f.description}"
-    impact = "be reused by anyone with repository access"
-    for keywords, effect in _SECRET_HINTS:
+    kind, impact = "Exposed Secret", "be reused by anyone with repository access"
+    for keywords, hint_kind, effect in _SECRET_HINTS:
         if _match(text, keywords):
-            impact = effect
+            kind, impact = hint_kind, effect
             break
-    return (f"A secret was committed at {f.affected_resource}; it could {impact}. "
-            f"Rotate the credential immediately and remove it from git history.")
+    narrative = (f"A secret was committed at {f.affected_resource}; it could {impact}. {_SECRET_FIX}")
+    return kind, narrative, _SECRET_FIX
 
 
-def _explain_misconfig(f: Finding) -> str:
+def _explain_misconfig(f: Finding) -> tuple[str, str, str]:
     if f.internet_facing or "0.0.0.0/0" in f.title:
-        return (f"{f.title} ({f.affected_resource}) leaves the resource open to the whole "
-                f"internet. Restrict ingress to known CIDR ranges.")
-    return (f"{f.title} at {f.affected_resource}. Apply the recommended secure configuration "
-            f"in the infrastructure code.")
+        fix = "Restrict ingress to known CIDR ranges."
+        narrative = (f"{f.title} ({f.affected_resource}) leaves the resource open to the whole "
+                     f"internet. {fix}")
+        return "Public Network Exposure", narrative, fix
+    fix = "Apply the recommended secure configuration in the infrastructure code."
+    narrative = f"{f.title} at {f.affected_resource}. {fix}"
+    return "Misconfiguration", narrative, fix
 
 
-def _explain_exposure(f: Finding) -> str:
-    return (f"{f.title} The resource {f.affected_resource} is reachable from the public "
-            f"internet, widening the attack surface. Limit access to trusted networks.")
+def _explain_exposure(f: Finding) -> tuple[str, str, str]:
+    fix = "Limit access to trusted networks."
+    narrative = (f"{f.title} The resource {f.affected_resource} is reachable from the public "
+                 f"internet, widening the attack surface. {fix}")
+    return "Internet Exposure", narrative, fix
 
 
-def _explain_iam(f: Finding) -> str:
-    return (f"{f.title} on {f.affected_resource}. Over-broad permissions let a compromised "
-            f"identity do far more damage. Apply least-privilege and remove wildcard/admin grants.")
+def _explain_iam(f: Finding) -> tuple[str, str, str]:
+    fix = "Apply least-privilege and remove wildcard/admin grants."
+    narrative = (f"{f.title} on {f.affected_resource}. Over-broad permissions let a compromised "
+                 f"identity do far more damage. {fix}")
+    return "Excess IAM Permissions", narrative, fix
+
+
+def explain_finding_structured(f: Finding) -> dict:
+    """The full picture behind a finding's explanation: a short `kind` label
+    for a quick-scan summary card, the full `narrative` sentence (what
+    explain_finding() has always returned), and `fix` - the actionable
+    clause on its own, not buried at the end of a paragraph."""
+    if f.type == "SECRET":
+        kind, narrative, fix = _explain_secret(f)
+    elif f.type == "VULNERABILITY":
+        kind, narrative, fix = _explain_cve(f) if f.cve_id else _explain_code_vuln(f)
+    elif f.type == "MISCONFIGURATION":
+        kind, narrative, fix = _explain_misconfig(f)
+    elif f.type == "IAM":
+        kind, narrative, fix = _explain_iam(f)
+    elif f.type == "EXPOSURE":
+        kind, narrative, fix = _explain_exposure(f)
+    else:
+        kind, narrative, fix = f.type.replace("_", " ").title(), f.title, ""
+    return {"kind": kind, "narrative": narrative, "fix": fix}
 
 
 def explain_finding(f: Finding) -> str:
-    if f.type == "SECRET":
-        return _explain_secret(f)
-    if f.type == "VULNERABILITY":
-        return _explain_cve(f) if f.cve_id else _explain_code_vuln(f)
-    if f.type == "MISCONFIGURATION":
-        return _explain_misconfig(f)
-    if f.type == "IAM":
-        return _explain_iam(f)
-    if f.type == "EXPOSURE":
-        return _explain_exposure(f)
-    return f.title
+    return explain_finding_structured(f)["narrative"]
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +209,10 @@ def explain_cluster(cluster: dict, members: list[Finding]) -> dict:
 
 def explain_all(findings: list[Finding], clusters: list[dict]) -> None:
     for f in findings:
-        f.explanation = explain_finding(f)
+        struct = explain_finding_structured(f)
+        f.explanation = struct["narrative"]
+        f.explanation_kind = struct["kind"]
+        f.explanation_fix = struct["fix"]
     by_id = {f.id: f for f in findings}
     for c in clusters:
         members = [by_id[i] for i in c["finding_ids"] if i in by_id]

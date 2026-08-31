@@ -30,6 +30,39 @@ RUN npm ci
 COPY dashboard/backend/. .
 RUN npm run build
 
+# ---- Stage: SonarQube distribution ----
+# Bundled by default (see ENABLE_SONARQUBE-equivalent SONARQUBE_AUTOSTART
+# below) so a single `docker run` gets a fully working SAST stage with zero
+# manual setup - copied from the real, official image rather than
+# reimplemented, so its own JVM tuning and Elasticsearch bootstrap logic is
+# reused unmodified.
+FROM sonarqube:community AS sonarqube-src
+# The image runs as its own non-root "sonarqube" user by default, which
+# lacks write access to delete anything under lib/extensions/ (confirmed
+# live - permission denied) - root is needed for this one step only.
+USER root
+# Drops language analyzers this project never scans (this repo and every
+# real target used against it so far are Python/JS/TS) - ~148MB of the
+# ~325MB bundled plugin payload (C#/VB.NET, Go, Java, Kotlin, PHP, Ruby,
+# Rust, Scala), plus the classloading/metaspace overhead of loading them at
+# boot. Deleted *here*, in the source stage, not via a later `RUN rm` on the
+# copy in the final stage - Docker layers are append-only, so a delete after
+# a COPY only hides the files from the running container, it does not
+# actually shrink the image (confirmed live: image size was unchanged after
+# doing it that way first). Deleting before the COPY means the final
+# stage's layer never contains this data in the first place.
+RUN rm -f /opt/sonarqube/lib/extensions/sonar-csharp-plugin-*.jar \
+          /opt/sonarqube/lib/extensions/sonar-vbnet-plugin-*.jar \
+          /opt/sonarqube/lib/extensions/sonar-go-plugin-*.jar \
+          /opt/sonarqube/lib/extensions/sonar-java-plugin-*.jar \
+          /opt/sonarqube/lib/extensions/sonar-java-symbolic-execution-plugin-*.jar \
+          /opt/sonarqube/lib/extensions/sonar-kotlin-plugin-*.jar \
+          /opt/sonarqube/lib/extensions/sonar-php-plugin-*.jar \
+          /opt/sonarqube/lib/extensions/sonar-ruby-plugin-*.jar \
+          /opt/sonarqube/lib/extensions/sonar-rust-plugin-*.jar \
+          /opt/sonarqube/lib/extensions/sonar-scala-plugin-*.jar \
+          /opt/sonarqube/lib/extensions/sonar-flex-plugin-*.jar
+
 # ---- Final: everything in one image ----
 FROM jenkins/jenkins:lts-jdk17
 USER root
@@ -55,6 +88,49 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Python dependencies for the AIOps engine.
 COPY jenkins/requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
+
+# SonarQube's own distribution, plus a dedicated user - the official image
+# also uses uid 1000 for its "sonarqube" user, which collides with this
+# base image's "jenkins" user (also uid 1000), so a distinct uid is required
+# rather than reusing whatever the source image shipped.
+COPY --from=sonarqube-src /opt/sonarqube /opt/sonarqube
+# SonarQube's own bundled JRE - it needs a newer Java than the Jenkins base
+# image ships (confirmed live: SonarQube's class files require Java 21+,
+# jenkins/jenkins:lts-jdk17 only provides 17, and both images happen to use
+# the exact same /opt/java/openjdk path for their own JDK, so this has to
+# land somewhere else and be pointed at explicitly for the sonarqube
+# process only - see JAVA_HOME in supervisord.conf's [program:sonarqube].
+COPY --from=sonarqube-src /opt/java/openjdk /opt/java-sonar
+RUN groupadd -g 1001 sonarqube \
+    && useradd -u 1001 -g sonarqube -d /opt/sonarqube -s /bin/bash -M sonarqube \
+    && mkdir -p /opt/sonarqube/data /opt/sonarqube/logs /opt/sonarqube/extensions /opt/sonarqube/temp \
+    && chown -R sonarqube:sonarqube /opt/sonarqube \
+    # entrypoint.sh hardcodes the literal path '/opt/java/openjdk/bin/java'
+    # rather than reading $JAVA_HOME - confirmed live (setting JAVA_HOME in
+    # supervisord's environment= had no effect, the script never reads it) -
+    # so the only working fix is patching the one script that hardcodes it,
+    # pointing it at the relocated JRE from the COPY above.
+    && sed -i 's|/opt/java/openjdk|/opt/java-sonar|' /opt/sonarqube/docker/entrypoint.sh
+# Bypasses the strict OS-level vm.max_map_count check Elasticsearch (bundled
+# inside SonarQube) normally requires - matches docker-compose.yml's own
+# sonarqube service, which sets the same override for the same reason.
+ENV SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true
+# Included by default - set to "false" (`-e SONARQUBE_AUTOSTART=false`) to
+# run without it, e.g. on a host that can't spare the extra ~3GB.
+ENV SONARQUBE_AUTOSTART=true
+# Modest heap trims below SonarQube's own 512m/512m/512m stock defaults -
+# only for web and the compute engine, which have real headroom for this
+# project's actual scan sizes (confirmed live: a real scan completed fine
+# at these levels). search (the bundled Elasticsearch) is deliberately left
+# at its stock 512m - it is the one component with a real minimum below
+# which it stops booting reliably, so it is not a safe place to save RAM.
+# Override any of the three yourself (`-e SONAR_CE_JAVAOPTS=...`) to raise
+# them back up if a genuinely large scan needs more.
+ENV SONAR_WEB_JAVAOPTS="-Xmx384m -Xms128m -XX:+HeapDumpOnOutOfMemoryError"
+ENV SONAR_CE_JAVAOPTS="-Xmx384m -Xms128m -XX:+HeapDumpOnOutOfMemoryError"
+COPY sonarqube-autoconfig.sh /usr/local/bin/sonarqube-autoconfig.sh
+COPY jenkins-entrypoint.sh /usr/local/bin/jenkins-entrypoint.sh
+RUN chmod +x /usr/local/bin/sonarqube-autoconfig.sh /usr/local/bin/jenkins-entrypoint.sh
 
 # Jenkins plugins, CasC config and the pipeline-approval hook - baked in via
 # the official image's /usr/share/jenkins/ref/ convention, which seeds
@@ -96,9 +172,11 @@ COPY --from=backend-build /app/dist ./dist
 ENV FINDINGS_DIR=/workspace/findings \
     AIOPS_OUTPUT=/workspace/findings/aiops-output.json \
     HISTORY_FILE=/workspace/findings/history.json \
+    FIRST_SEEN_FILE=/workspace/findings/first_seen.json \
     ENGINE_DIR=/workspace/aiops_engine \
     SUPPRESSION_RULES=/workspace/aiops_engine/suppression_rules.json \
     AWS_MONITOR=/workspace/aws_monitor/monitor.py \
+    AWS_STATUS_CHECK=/workspace/aws_monitor/status_check.py \
     PYTHON_BIN=python3 \
     PORT=4000
 
@@ -110,6 +188,6 @@ RUN rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 
 COPY supervisord.conf /etc/supervisor/conf.d/threatweave.conf
 
-EXPOSE 80 4000 8080 50000
+EXPOSE 80 4000 8080 50000 9000
 WORKDIR /workspace
 ENTRYPOINT ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/threatweave.conf"]

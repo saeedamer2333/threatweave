@@ -48,6 +48,7 @@ export class EngineService {
       '--input', join(PATHS.findingsDir, 'scan-inputs'),
       '--output', PATHS.aiopsOutput,
       '--history', PATHS.history,
+      '--first-seen', PATHS.firstSeen,
     ], PATHS.engineDir)
       .then(() => {
         const finished = new Date();
@@ -90,8 +91,14 @@ export class EngineService {
   }
 
   /**
-   * Whether Boto3 can resolve credentials, and for which account. Used by the
-   * Settings page so the user sees connection state without typing anything.
+   * Whether Boto3 can resolve credentials, for which account, and - beyond
+   * just "credentials parse" - whether they can actually read anything.
+   * `sts:GetCallerIdentity` alone needs no IAM permission at all, so relying
+   * on it exclusively would show "Connected" for a real account even with
+   * zero attached policies, while every actual check in monitor.py silently
+   * failed with AccessDenied. status_check.py probes the same services
+   * monitor.py's checks use. Used by the Settings page so the user sees
+   * real connection *and* permission state without typing anything.
    */
   async getAwsStatus(): Promise<{
     connected: boolean;
@@ -99,25 +106,32 @@ export class EngineService {
     arn?: string;
     region?: string;
     message?: string;
+    /** Distinguishes "the deployment itself is broken" (a missing script, a
+     * bad path - nothing the user watching the dashboard can fix by
+     * configuring AWS) from "credentials genuinely aren't set up yet" -
+     * without this, the generic "run aws configure" guidance shows even
+     * when the real problem has nothing to do with credentials, which reads
+     * as unclear/wrong advice rather than an actual explanation. */
+    messageKind?: 'deployment' | 'credentials' | 'unknown';
+    permissions?: { ec2: boolean; s3: boolean; iam: boolean };
+    hasFullAccess?: boolean;
   }> {
-    const script = [
-      'import json',
-      'try:',
-      '    import boto3',
-      '    s = boto3.Session()',
-      '    i = s.client("sts").get_caller_identity()',
-      '    print(json.dumps({"connected": True, "account": i["Account"],',
-      '                      "arn": i["Arn"], "region": s.region_name}))',
-      'except Exception as e:',
-      '    print(json.dumps({"connected": False, "message": str(e)[:200]}))',
-    ].join('\n');
-
     try {
-      const out = await this.run(PATHS.python, ['-c', script], PATHS.projectRoot);
+      const out = await this.run(PATHS.python, [PATHS.awsStatusCheck], PATHS.projectRoot);
       const line = out.reverse().find((l) => l.trim().startsWith('{'));
-      return line ? JSON.parse(line) : { connected: false, message: 'No response' };
+      return line ? JSON.parse(line) : { connected: false, message: 'No response', messageKind: 'unknown' };
     } catch (err) {
-      return { connected: false, message: (err as Error).message };
+      const raw = (err as Error).message;
+      if (/No such file or directory|ENOENT|cannot find the (file|path)/i.test(raw)) {
+        return {
+          connected: false,
+          messageKind: 'deployment',
+          message:
+            'The AWS status-check script is missing from this deployment. This is a container ' +
+            `configuration problem, not something fixable by setting up AWS credentials. (${raw})`,
+        };
+      }
+      return { connected: false, messageKind: 'unknown', message: raw };
     }
   }
 

@@ -19,6 +19,10 @@ findings/**/*.json
 !findings/.gitkeep
 !findings/scan-inputs/.gitkeep
 
+# GitLeaks incremental-scan state (last-scanned commit + cumulative
+# findings) - runtime-generated per environment, not something to commit.
+findings/gitleaks-state/
+
 # Vendored demo scan target (OWASP Juice Shop, ~95MB) - fetched on demand by
 # scripts/fetch-demo-target.sh rather than committed, so the repo stays small
 # and focused on ThreatWeave's own code.

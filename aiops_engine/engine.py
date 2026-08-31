@@ -21,6 +21,7 @@ import suppressor
 import scorer
 import correlator
 import explainer
+import finding_tracker
 import health_score
 import history_tracker
 from schema import SEVERITIES
@@ -43,8 +44,10 @@ def _rank(f) -> tuple:
 
 
 def run(input_dir: Path, output_file: Path,
-        history_file: Path | None = None, run_id: str | None = None) -> dict:
+        history_file: Path | None = None, run_id: str | None = None,
+        first_seen_file: Path | None = None) -> dict:
     history_file = history_file or output_file.parent / "history.json"
+    first_seen_file = first_seen_file or output_file.parent / "first_seen.json"
     print("AIOps engine starting")
     print("1/6 aggregate + normalise")
     raw, sources = aggregator.load_all(input_dir)
@@ -77,10 +80,19 @@ def run(input_dir: Path, output_file: Path,
     summary = health_score.summarise(raw_count, findings, clusters)
 
     now = datetime.now(timezone.utc)
+    now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # first_seen/last_seen answer "how long has this been open", which a
+    # finding's own `id` (a fresh UUID every run) cannot - every finding in
+    # this run shares the exact same `now_str` rather than each getting its
+    # own timestamp, so two findings detected in the same run always show
+    # the same first_seen.
+    finding_tracker.track(findings, first_seen_file, now_str)
+
     output = {
         # minute-resolution so several validation runs on one day stay distinct
         "run_id": run_id or f"run-{now:%Y-%m-%d-%H%M}",
-        "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated_at": now_str,
         "health_score": health,
         "summary": {**summary, "suppressed": suppressed_count},
         "sources": sources,
@@ -106,10 +118,11 @@ def main():
     ap.add_argument("--input", default=str(HERE / "sample_inputs"))
     ap.add_argument("--output", default=str(HERE.parent / "findings" / "aiops-output.json"))
     ap.add_argument("--history", default=str(HERE.parent / "findings" / "history.json"))
+    ap.add_argument("--first-seen", default=str(HERE.parent / "findings" / "first_seen.json"))
     ap.add_argument("--run-id", default=None,
                     help="label this run, e.g. scenario-1-baseline")
     args = ap.parse_args()
-    run(Path(args.input), Path(args.output), Path(args.history), args.run_id)
+    run(Path(args.input), Path(args.output), Path(args.history), args.run_id, Path(args.first_seen))
 
 
 if __name__ == "__main__":

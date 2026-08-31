@@ -31,22 +31,31 @@ WEIGHTS = {"P_RF": 0.45, "S_retrieval": 0.25, "S_asset": 0.20, "S_EPSS": 0.10}
 _SEV_BASE = {"CRITICAL": 0.95, "HIGH": 0.8, "MEDIUM": 0.5, "LOW": 0.25, "INFO": 0.1}
 
 
-def _p_rf(f: Finding) -> float:
+def _p_rf(f: Finding, evidence: dict) -> float:
     """Random Forest probability that the finding is severe."""
     proba = rf_predict.predict_p_rf(f.title, f.description)
     if proba is not None:
+        evidence["p_rf_basis"] = "model"
+        evidence["p_rf_terms"] = rf_predict.explain_p_rf(f.title, f.description)
         return proba
     if f.cvss_score is not None:                       # fallback
+        evidence["p_rf_basis"] = "cvss"
         return min(f.cvss_score / 10.0, 1.0)
+    evidence["p_rf_basis"] = "severity"
     return _SEV_BASE.get(f.severity, 0.5)
 
 
-def _s_retrieval(f: Finding) -> float:
+def _s_retrieval(f: Finding, evidence: dict) -> float:
     """BM25 similarity to known-scored vulnerabilities."""
     query = f"{f.title} {f.description}".strip()
     score = retrieval.retrieve_score(query)
     if score is not None:
+        evidence["retrieval_basis"] = "corpus"
+        evidence["retrieval_matches"] = [
+            {"id": cve_id, "similarity": sim} for cve_id, sim in retrieval.explain_matches(query)
+        ]
         return score
+    evidence["retrieval_basis"] = "severity"
     return _SEV_BASE.get(f.severity, 0.5)              # fallback
 
 
@@ -85,7 +94,7 @@ def propagate_exposure(findings: list[Finding]) -> int:
     return marked
 
 
-def _s_asset(f: Finding) -> float:
+def _s_asset(f: Finding, evidence: dict) -> float:
     """Asset criticality - deterministic by design, never learned.
 
     Three bands, as specified in the report: a publicly reachable resource with
@@ -93,9 +102,12 @@ def _s_asset(f: Finding) -> float:
     exposure scores 0.6, and one with no established route scores 0.3.
     """
     if f.internet_facing:
+        evidence["asset_basis"] = "internet_facing"
         return 1.0       # first-hand: this finding IS the public exposure
     if f.reachable_via_exposure:
+        evidence["asset_basis"] = "reachable_via_exposure"
         return 0.6       # inherited: reachable through an exposed asset
+    evidence["asset_basis"] = "no_route"
     return 0.3           # no established route to this resource
 
 
@@ -137,14 +149,19 @@ def score(findings: list[Finding]) -> list[Finding]:
               "falling back to reported severity.")
 
     for f in findings:
+        evidence: dict = {}
+        epss_val = epss_scores.get((f.cve_id or "").upper(), 0.0)
+        evidence["epss_available"] = bool(f.cve_id) and (f.cve_id or "").upper() in epss_scores
+
         s = {
-            "P_RF": round(_p_rf(f), 2),
-            "S_retrieval": round(_s_retrieval(f), 2),
-            "S_asset": round(_s_asset(f), 2),
-            "S_EPSS": round(epss_scores.get((f.cve_id or "").upper(), 0.0), 2),
+            "P_RF": round(_p_rf(f, evidence), 2),
+            "S_retrieval": round(_s_retrieval(f, evidence), 2),
+            "S_asset": round(_s_asset(f, evidence), 2),
+            "S_EPSS": round(epss_val, 2),
         }
         final = sum(WEIGHTS[k] * s[k] for k in WEIGHTS)
         f.scores = s
+        f.score_evidence = evidence
         f.risk_score = round(final * 100)
         f.confidence = _confidence(s["P_RF"])
     return findings

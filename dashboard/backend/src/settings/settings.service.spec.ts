@@ -1,7 +1,7 @@
 jest.mock('fs/promises');
 jest.mock('fs');
 jest.mock('../config/paths', () => ({
-  PATHS: { findingsDir: '/fake/findings' },
+  PATHS: { findingsDir: '/fake/findings', target: '/fake/target' },
 }));
 
 import { readFile, writeFile } from 'fs/promises';
@@ -159,6 +159,170 @@ describe('SettingsService', () => {
       }) as never);
 
       expect(await service.enabledChecks()).toBe('');
+    });
+  });
+
+  describe('detectTarget', () => {
+    it('suggests /target itself when there is no nested juice-shop demo folder', async () => {
+      mockExistsSync.mockReturnValue(false);
+
+      const result = await service.detectTarget();
+
+      expect(result.sourceDir).toBe('/fake/target');
+      expect(result.hasDockerfile).toBe(false);
+      expect(result.projectName).toBeUndefined();
+    });
+
+    it('suggests /target/juice-shop when the bundled demo layout is detected', async () => {
+      mockExistsSync.mockImplementation((p) => (p as string).endsWith('juice-shop'));
+
+      const result = await service.detectTarget();
+
+      expect(result.sourceDir).toBe(join('/fake/target', 'juice-shop'));
+    });
+
+    it("suggests a project key from the mounted project's package.json name", async () => {
+      mockExistsSync.mockImplementation((p) => (p as string).endsWith('package.json'));
+      mockReadFile.mockResolvedValue(JSON.stringify({ name: 'accesshub' }) as never);
+
+      const result = await service.detectTarget();
+
+      expect(result.projectName).toBe('accesshub');
+    });
+
+    it('sanitises a scoped npm package name into a valid SonarQube project key', async () => {
+      mockExistsSync.mockImplementation((p) => (p as string).endsWith('package.json'));
+      mockReadFile.mockResolvedValue(JSON.stringify({ name: '@my-org/my-app' }) as never);
+
+      const result = await service.detectTarget();
+
+      expect(result.projectName).toBe('-my-org-my-app');
+    });
+
+    it('reports no project name when there is no readable package.json', async () => {
+      mockExistsSync.mockReturnValue(false);
+
+      const result = await service.detectTarget();
+
+      expect(result.projectName).toBeUndefined();
+    });
+
+    it('reports hasDockerfile true only when the target actually has one', async () => {
+      mockExistsSync.mockImplementation((p) => (p as string).endsWith('Dockerfile'));
+
+      const result = await service.detectTarget();
+
+      expect(result.hasDockerfile).toBe(true);
+    });
+
+    it('does not throw when package.json exists but is not valid JSON', async () => {
+      mockExistsSync.mockImplementation((p) => (p as string).endsWith('package.json'));
+      mockReadFile.mockResolvedValue('{not valid json' as never);
+
+      const result = await service.detectTarget();
+
+      expect(result.projectName).toBeUndefined();
+    });
+  });
+
+  describe('checkSonarQubeStatus', () => {
+    const originalEnv = process.env.SONARQUBE_AUTOSTART;
+    const originalFetch = global.fetch;
+
+    afterEach(() => {
+      process.env.SONARQUBE_AUTOSTART = originalEnv;
+      global.fetch = originalFetch;
+    });
+
+    it('is not relevant when SONARQUBE_AUTOSTART is not true (e.g. split docker-compose deployment)', async () => {
+      process.env.SONARQUBE_AUTOSTART = 'false';
+      mockExistsSync.mockReturnValue(true);
+
+      const result = await service.checkSonarQubeStatus();
+
+      expect(result).toEqual({ relevant: false, healthy: false });
+    });
+
+    it('is not relevant when this is not the all-in-one image (/opt/sonarqube absent)', async () => {
+      process.env.SONARQUBE_AUTOSTART = 'true';
+      mockExistsSync.mockReturnValue(false);
+
+      const result = await service.checkSonarQubeStatus();
+
+      expect(result).toEqual({ relevant: false, healthy: false });
+    });
+
+    it('is not relevant while still on its first boot (no marker file yet)', async () => {
+      process.env.SONARQUBE_AUTOSTART = 'true';
+      mockExistsSync.mockImplementation((p) => (p as string) === '/opt/sonarqube');
+
+      const result = await service.checkSonarQubeStatus();
+
+      expect(result).toEqual({ relevant: false, healthy: false });
+    });
+
+    it('is not relevant when the marker was written empty (autoconfig never confirmed SonarQube up)', async () => {
+      process.env.SONARQUBE_AUTOSTART = 'true';
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockResolvedValue('' as never);
+
+      const result = await service.checkSonarQubeStatus();
+
+      expect(result).toEqual({ relevant: false, healthy: false });
+    });
+
+    it('reports healthy when SonarQube responds UP after having been confirmed up once', async () => {
+      process.env.SONARQUBE_AUTOSTART = 'true';
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockResolvedValue('SONAR_HOST_URL=http://localhost:9000\nSONAR_TOKEN=squ_x' as never);
+      global.fetch = jest.fn().mockResolvedValue({
+        json: async () => ({ status: 'UP' }),
+      } as never);
+
+      const result = await service.checkSonarQubeStatus();
+
+      expect(result).toEqual({ relevant: true, healthy: true });
+    });
+
+    it('reports an OOM crash when unreachable and the logs show OutOfMemoryError', async () => {
+      process.env.SONARQUBE_AUTOSTART = 'true';
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockImplementation(async (p) => {
+        const path = p as string;
+        if (path.endsWith('.sonar-env')) return 'SONAR_HOST_URL=http://localhost:9000\nSONAR_TOKEN=squ_x';
+        if (path.endsWith('es.log')) return 'some line\njava.lang.OutOfMemoryError: Java heap space\n';
+        return '';
+      });
+      global.fetch = jest.fn().mockRejectedValue(new Error('connect ECONNREFUSED'));
+
+      const result = await service.checkSonarQubeStatus();
+
+      expect(result).toEqual({
+        relevant: true,
+        healthy: false,
+        crashReason: 'oom',
+        message: 'SonarQube ran out of memory and stopped.',
+      });
+    });
+
+    it('reports an unknown-cause failure when unreachable with no OOM signature in the logs', async () => {
+      process.env.SONARQUBE_AUTOSTART = 'true';
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockImplementation(async (p) => {
+        const path = p as string;
+        if (path.endsWith('.sonar-env')) return 'SONAR_HOST_URL=http://localhost:9000\nSONAR_TOKEN=squ_x';
+        return 'nothing unusual here\n';
+      });
+      global.fetch = jest.fn().mockRejectedValue(new Error('connect ECONNREFUSED'));
+
+      const result = await service.checkSonarQubeStatus();
+
+      expect(result).toEqual({
+        relevant: true,
+        healthy: false,
+        crashReason: 'other',
+        message: 'SonarQube was running but is not responding now.',
+      });
     });
   });
 });

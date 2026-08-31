@@ -137,12 +137,97 @@ def test_cluster_rule_a_explanation_names_the_shared_cve():
     assert "Node.js / log4j-2.14.1" in result["recommended_action"]
 
 
+# ---- explain_finding_structured: kind/fix cards for the dashboard ---------
+
+def test_structured_cve_gives_a_generic_cve_kind_and_the_actionable_clause_alone():
+    f = _f(cve_id="CVE-2021-44228", cvss_score=10.0, merged_count=1)
+    result = explainer.explain_finding_structured(f)
+    assert result["kind"] == "Known Vulnerability (CVE)"
+    assert result["fix"] == "Upgrade the package to a fixed version and redeploy."
+    assert result["narrative"] == explainer.explain_finding(f)
+
+
+def test_structured_merged_cve_fix_mentions_the_real_count():
+    f = _f(cve_id="CVE-2019-2", merged_count=5)
+    result = explainer.explain_finding_structured(f)
+    assert "5 CVEs" in result["fix"]
+
+
+def test_structured_sql_injection_gets_its_own_specific_kind():
+    f = _f(cve_id=None, title="SQL Injection risk", description="user input reaches a query")
+    result = explainer.explain_finding_structured(f)
+    assert result["kind"] == "SQL Injection"
+    assert result["fix"] == "Use parameterised queries or an ORM so input can never alter query structure."
+
+
+def test_structured_unmatched_code_vuln_gets_a_generic_kind_not_a_blank_one():
+    f = _f(cve_id=None, title="Obscure finding with no keyword match", description="")
+    result = explainer.explain_finding_structured(f)
+    assert result["kind"] == "Code Vulnerability"
+    assert result["fix"]
+
+
+def test_structured_aws_secret_gets_a_specific_kind_distinct_from_a_generic_secret():
+    f = _f(type="SECRET", title="AWS Access Key Detected", description="AKIA... found")
+    result = explainer.explain_finding_structured(f)
+    assert result["kind"] == "AWS Credential"
+
+
+def test_structured_generic_secret_falls_back_to_a_generic_kind():
+    f = _f(type="SECRET", title="Generic API Key", description="")
+    result = explainer.explain_finding_structured(f)
+    assert result["kind"] == "Exposed Secret"
+
+
+def test_structured_internet_facing_misconfig_is_flagged_distinctly_from_a_generic_one():
+    exposed = _f(type="MISCONFIGURATION", title="Security group allows 0.0.0.0/0", internet_facing=True)
+    generic = _f(type="MISCONFIGURATION", title="Missing encryption", internet_facing=False)
+    assert explainer.explain_finding_structured(exposed)["kind"] == "Public Network Exposure"
+    assert explainer.explain_finding_structured(generic)["kind"] == "Misconfiguration"
+
+
+def test_structured_iam_and_exposure_have_their_own_kinds():
+    iam = _f(type="IAM", title="AdministratorAccess attached")
+    exposure = _f(type="EXPOSURE", title="Host publicly reachable")
+    assert explainer.explain_finding_structured(iam)["kind"] == "Excess IAM Permissions"
+    assert explainer.explain_finding_structured(exposure)["kind"] == "Internet Exposure"
+
+
+def test_structured_every_kind_has_a_non_empty_fix_except_the_unmapped_fallback():
+    # Every real template gives an analyst something concrete to do - only
+    # the genuinely-unmapped fallback (a type this engine has no template
+    # for at all) has nothing to suggest.
+    for f in [
+        _f(cve_id="CVE-1"),
+        _f(cve_id=None, title="x"),
+        _f(type="SECRET", title="x"),
+        _f(type="MISCONFIGURATION", title="x"),
+        _f(type="IAM", title="x"),
+        _f(type="EXPOSURE", title="x"),
+    ]:
+        assert explainer.explain_finding_structured(f)["fix"] != ""
+
+
+def test_structured_unmapped_type_has_no_fix_to_invent():
+    f = _f(type="SOMETHING_UNMAPPED", title="Raw title text")
+    result = explainer.explain_finding_structured(f)
+    assert result["narrative"] == "Raw title text"
+    assert result["fix"] == ""
+
+
 # ---- explain_all: wiring ----------------------------------------------------
 
 def test_explain_all_sets_explanation_on_every_finding():
     findings = [_f(cve_id="CVE-1"), _f(type="IAM", title="x")]
     explainer.explain_all(findings, clusters=[])
     assert all(f.explanation for f in findings)
+
+
+def test_explain_all_also_sets_the_new_kind_and_fix_fields():
+    f = _f(cve_id="CVE-1")
+    explainer.explain_all([f], clusters=[])
+    assert f.explanation_kind == "Known Vulnerability (CVE)"
+    assert f.explanation_fix == "Upgrade the package to a fixed version and redeploy."
 
 
 def test_explain_all_attaches_explanation_dict_to_each_cluster():

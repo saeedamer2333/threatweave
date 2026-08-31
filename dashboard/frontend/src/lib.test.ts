@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { healthLabel, dirGlob, filterFindings, formatElapsed } from './lib';
+import { healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge } from './lib';
 import type { Finding } from './types';
 
 function finding(overrides: Partial<Finding> = {}): Finding {
@@ -119,5 +119,181 @@ describe('filterFindings', () => {
 
   it('treats a blank query as no filter', () => {
     expect(filterFindings(findings, { query: '   ' })).toHaveLength(3);
+  });
+});
+
+describe('describeAwsAuthMethod', () => {
+  it('labels an assumed-role ARN as an IAM role', () => {
+    const result = describeAwsAuthMethod('arn:aws:sts::194722404383:assumed-role/threatweave-ec2-role/i-0abc123');
+    expect(result).toContain('IAM role');
+  });
+
+  it('labels a user ARN as a static access key', () => {
+    const result = describeAwsAuthMethod('arn:aws:iam::194722404383:user/Cli-Access');
+    expect(result).toContain('static access key');
+  });
+
+  it('flags the root user distinctly, as not recommended', () => {
+    const result = describeAwsAuthMethod('arn:aws:iam::194722404383:root');
+    expect(result).toContain('root');
+    expect(result).toContain('not recommended');
+  });
+
+  it('returns null for an unrecognised ARN shape rather than guessing', () => {
+    expect(describeAwsAuthMethod('arn:aws:iam::194722404383:federated-user/someone')).toBeNull();
+  });
+
+  it('returns null when there is no ARN yet', () => {
+    expect(describeAwsAuthMethod(undefined)).toBeNull();
+  });
+});
+
+describe('describeFindingAge', () => {
+  const now = new Date('2026-08-10T00:00:00Z');
+
+  it('shows "New" when first detected in the run being viewed', () => {
+    expect(describeFindingAge('2026-08-10T00:00:00Z', now)).toBe('New');
+  });
+
+  it('singularises exactly one day open', () => {
+    expect(describeFindingAge('2026-08-09T00:00:00Z', now)).toBe('Open 1 day');
+  });
+
+  it('pluralises several days open', () => {
+    expect(describeFindingAge('2026-08-01T00:00:00Z', now)).toBe('Open 9 days');
+  });
+
+  it('returns null when first_seen is absent, rather than a wrong value', () => {
+    expect(describeFindingAge(null, now)).toBeNull();
+    expect(describeFindingAge(undefined, now)).toBeNull();
+  });
+
+  it('returns null for an unparseable date', () => {
+    expect(describeFindingAge('not-a-date', now)).toBeNull();
+  });
+});
+
+describe('formatScoreValue', () => {
+  // Regression: confirmed live against real cached EPSS data - 29 of 33
+  // real, nonzero scores (e.g. 0.00366) were displaying as the exact same
+  // "0.00" a genuine miss shows, making real data visually indistinguishable
+  // from no data at all.
+  it('shows a genuine zero as 0.00', () => {
+    expect(formatScoreValue(0)).toBe('0.00');
+  });
+
+  it('shows a small but real nonzero value with more precision, not as 0.00', () => {
+    expect(formatScoreValue(0.00366)).toBe('0.0037');
+    expect(formatScoreValue(0.00366)).not.toBe('0.00');
+  });
+
+  it('shows a normal-sized value to 2 decimal places as before', () => {
+    expect(formatScoreValue(0.68)).toBe('0.68');
+  });
+
+  it('treats exactly 0.01 as a normal-sized value, not a small one', () => {
+    expect(formatScoreValue(0.01)).toBe('0.01');
+  });
+});
+
+describe('isRealDescription', () => {
+  // Regression: confirmed live - every single Checkov finding's own
+  // `description` field is a bare URL to Prisma Cloud's policy docs, never
+  // real prose. Showing it as "What this actually is" was misleading.
+  it('rejects a bare URL, matching what Checkov always provides', () => {
+    expect(isRealDescription('https://docs.prismacloud.io/en/enterprise-edition/policy-reference/x')).toBe(false);
+  });
+
+  it('accepts genuine prose, matching what Trivy provides', () => {
+    expect(isRealDescription('A flaw was found in glibc. The strfmon function is vulnerable to a buffer overflow.')).toBe(true);
+  });
+
+  it('rejects undefined and empty string', () => {
+    expect(isRealDescription(undefined)).toBe(false);
+    expect(isRealDescription('')).toBe(false);
+  });
+
+  it('accepts text that happens to contain a URL as part of a real sentence', () => {
+    expect(isRealDescription('See https://example.com for more detail on this specific flaw.')).toBe(true);
+  });
+});
+
+describe('confidenceExplanation', () => {
+  it('explains High Confidence in terms of the actual P_RF percentage', () => {
+    const f = finding({ confidence: 'High Confidence', scores: { P_RF: 0.9, S_retrieval: 0, S_asset: 0, S_EPSS: 0 } });
+    const result = confidenceExplanation(f);
+    expect(result).toContain('90%');
+    expect(result).toContain('≥85%');
+  });
+
+  it('explains Moderate in terms of the actual P_RF percentage', () => {
+    const f = finding({ confidence: 'Moderate', scores: { P_RF: 0.68, S_retrieval: 0, S_asset: 0, S_EPSS: 0 } });
+    const result = confidenceExplanation(f);
+    expect(result).toContain('68%');
+    expect(result).toContain('60-84%');
+  });
+
+  it('explains Needs Analyst Review in terms of the actual P_RF percentage', () => {
+    const f = finding({ confidence: 'Needs Analyst Review', scores: { P_RF: 0.3, S_retrieval: 0, S_asset: 0, S_EPSS: 0 } });
+    const result = confidenceExplanation(f);
+    expect(result).toContain('30%');
+    expect(result).toContain('below 60%');
+  });
+});
+
+describe('evidenceText', () => {
+  it('returns null when a finding has no score_evidence at all', () => {
+    expect(evidenceText('P_RF', finding())).toBeNull();
+  });
+
+  it('names the specific terms that drove a model-based P_RF prediction', () => {
+    const f = finding({ score_evidence: {
+      p_rf_basis: 'model',
+      p_rf_terms: [{ term: 'sql injection', source: 'description', weight: 0.12 }],
+    } });
+    const result = evidenceText('P_RF', f);
+    expect(result).toContain('sql injection');
+  });
+
+  it('explains the CVSS fallback distinctly from the model path', () => {
+    const f = finding({ score_evidence: { p_rf_basis: 'cvss' } });
+    expect(evidenceText('P_RF', f)).toContain('CVSS');
+  });
+
+  it('explains the severity fallback and names the actual reported severity', () => {
+    const f = finding({ severity: 'CRITICAL', score_evidence: { p_rf_basis: 'severity' } });
+    expect(evidenceText('P_RF', f)).toContain('CRITICAL');
+  });
+
+  it('lists the specific nearest-known-CVE matches for a corpus-based retrieval score', () => {
+    const f = finding({ score_evidence: {
+      retrieval_basis: 'corpus',
+      retrieval_matches: [{ id: 'CVE-2021-44228', similarity: 8.4 }],
+    } });
+    expect(evidenceText('S_retrieval', f)).toContain('CVE-2021-44228');
+  });
+
+  it('distinguishes direct internet-facing exposure from inherited exposure', () => {
+    const direct = finding({ score_evidence: { asset_basis: 'internet_facing' } });
+    const inherited = finding({ score_evidence: { asset_basis: 'reachable_via_exposure' } });
+    expect(evidenceText('S_asset', direct)).toContain('itself the public exposure');
+    expect(evidenceText('S_asset', inherited)).toContain('inherited exposure');
+  });
+
+  it('names the actual CVE when EPSS data was found', () => {
+    const f = finding({ cve_id: 'CVE-2021-44228', score_evidence: { epss_available: true } });
+    expect(evidenceText('S_EPSS', f)).toContain('CVE-2021-44228');
+  });
+
+  it('distinguishes "no EPSS data for this CVE" from "no CVE at all"', () => {
+    const withCve = finding({ cve_id: 'CVE-2021-44228', score_evidence: { epss_available: false } });
+    const withoutCve = finding({ cve_id: null, score_evidence: { epss_available: false } });
+    expect(evidenceText('S_EPSS', withCve)).toContain('CVE-2021-44228');
+    expect(evidenceText('S_EPSS', withoutCve)).toContain('No CVE attached');
+  });
+
+  it('returns null for an unrecognised score key rather than guessing', () => {
+    const f = finding({ score_evidence: { p_rf_basis: 'model' } });
+    expect(evidenceText('not_a_real_key', f)).toBeNull();
   });
 });

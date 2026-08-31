@@ -18,25 +18,18 @@ from __future__ import annotations
 
 import re
 
-from schema import Finding, SEVERITIES
+from schema import Finding, SEVERITIES, finding_identity
 
 # "image (debian 13.5) / tar-1.34+dfsg-1.2" -> "tar"
 # "Node.js / lodash-4.17.15"                -> "lodash"
 _PKG = re.compile(r"/\s*([A-Za-z0-9@._+-]+?)-\d[\w.+~-]*\s*$")
 
-
-def _key(f: Finding) -> str:
-    if f.cve_id:
-        return f"cve:{f.cve_id.upper()}"
-    if f.rule_id:
-        # Checkov reports several distinct checks against one Terraform
-        # resource, all sharing the same (coarse, first-line-of-range)
-        # affected_resource. Without rule_id in the key, unrelated checks
-        # (e.g. "EC2 is EBS optimized" and "EC2 should not have public IP")
-        # collapse into one record and OR-merge fields like internet_facing
-        # across findings that have nothing to do with each other.
-        return f"rule:{f.source}:{f.rule_id}:{f.affected_resource.lower()}"
-    return f"{f.type}:{f.affected_resource.lower()}"
+# finding_identity() lives in schema.py so finding_tracker.py can reuse the
+# exact same "same underlying issue" definition for cross-run tracking -
+# aliased here under the original name so the rest of this file (and its
+# own comment about *why* rule_id has to be part of the key) reads
+# unchanged.
+_key = finding_identity
 
 
 def _more_severe(a: str, b: str) -> str:

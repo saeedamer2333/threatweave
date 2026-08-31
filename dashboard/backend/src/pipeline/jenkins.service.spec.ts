@@ -1,6 +1,17 @@
 import { JenkinsService } from './jenkins.service';
 import { PipelineSettings } from '../settings/settings.service';
 
+// JenkinsService talks to Jenkins via undici's fetch directly (not Node's
+// global fetch) so it can hand it a dispatcher with keep-alive disabled -
+// see the comment on JenkinsService.agent for why that distinction matters.
+// Mocking undici's export, rather than global.fetch, is what actually
+// intercepts those calls.
+jest.mock('undici', () => ({
+  ...jest.requireActual('undici'),
+  fetch: jest.fn(),
+}));
+import { fetch as undiciFetchMock } from 'undici';
+
 const SETTINGS: PipelineSettings = {
   sourceDir: '/target',
   iacDir: '/target/infra',
@@ -47,8 +58,8 @@ describe('JenkinsService', () => {
   beforeEach(() => {
     jest.useFakeTimers();
     service = new JenkinsService();
-    fetchMock = jest.fn();
-    global.fetch = fetchMock as never;
+    fetchMock = undiciFetchMock as jest.Mock;
+    fetchMock.mockReset();
   });
 
   afterEach(() => {
@@ -57,6 +68,40 @@ describe('JenkinsService', () => {
   });
 
   it('reports idle before any build is triggered', () => {
+    expect(service.getStatus()).toEqual({ state: 'idle' });
+  });
+
+  // ---- Regression: confirmed live. Redeploying the api container mid-build
+  // wipes JenkinsService's in-memory tracking entirely - the sidebar was
+  // left showing "Scanning..." forever afterward even though Jenkins itself
+  // had already finished the build with SUCCESS minutes earlier, because
+  // nothing ever told the new process that build was still (or had been)
+  // running.
+  it('resumes tracking a build that is still running when the service starts up', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      building: true, number: 21, url: 'http://jenkins:8080/job/threatweave-pipeline/21/', timestamp: Date.now(),
+    }));
+
+    await service.onModuleInit();
+
+    expect(service.getStatus().state).toBe('running');
+    expect(service.getStatus().buildNumber).toBe(21);
+  });
+
+  it('stays idle at startup when the last build already finished', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      building: false, number: 21, url: 'http://jenkins:8080/job/threatweave-pipeline/21/', timestamp: Date.now(),
+    }));
+
+    await service.onModuleInit();
+
+    expect(service.getStatus()).toEqual({ state: 'idle' });
+  });
+
+  it('stays idle at startup rather than throwing when Jenkins cannot be reached', async () => {
+    fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
+
+    await expect(service.onModuleInit()).resolves.toBeUndefined();
     expect(service.getStatus()).toEqual({ state: 'idle' });
   });
 
@@ -96,6 +141,40 @@ describe('JenkinsService', () => {
 
     expect(status.state).toBe('failed');
     expect(status.error).toContain('404');
+  });
+
+  // ---- Regression: confirmed live. Queue item causes showed three
+  // TimerTrigger entries (the cron poll) plus one UserIdCause (a manual
+  // "Run scan" click) all merged into a single blocked item - "why": "Build
+  // #44 is already in progress". Jenkins answers a trigger request that
+  // gets folded into an already-existing queue item with 200 and no
+  // Location header (not 201 + Location, which only happens for a genuinely
+  // new item) - previously treated as an unconditional failure even though
+  // a real build was running the entire time.
+  it('reconciles with the running build rather than failing when Jenkins returns no Location header', async () => {
+    fetchMock
+      .mockResolvedValueOnce(NO_CRUMB)
+      .mockResolvedValueOnce({ ok: true, headers: new Headers() } as Response) // 200, no Location
+      .mockResolvedValueOnce(jsonResponse({
+        building: true, number: 44, url: 'http://jenkins:8080/job/threatweave-pipeline/44/', timestamp: Date.now(),
+      }));
+
+    const status = await service.triggerBuild(SETTINGS);
+
+    expect(status.state).toBe('running');
+    expect(status.buildNumber).toBe(44);
+  });
+
+  it('still reports failed when there is no Location header and no build is actually running', async () => {
+    fetchMock
+      .mockResolvedValueOnce(NO_CRUMB)
+      .mockResolvedValueOnce({ ok: true, headers: new Headers() } as Response) // 200, no Location
+      .mockResolvedValueOnce(jsonResponse({ building: false, number: 44, url: '', timestamp: Date.now() }));
+
+    const status = await service.triggerBuild(SETTINGS);
+
+    expect(status.state).toBe('failed');
+    expect(status.error).toContain('did not return a queue item location');
   });
 
   it('proceeds without a crumb when no crumb issuer is available', async () => {
@@ -153,6 +232,112 @@ describe('JenkinsService', () => {
 
     await jest.advanceTimersByTimeAsync(3000); // second console poll tick - build finishes
     expect(service.getStatus().state).toBe('success');
+  });
+
+  it('tracks which declared stage is currently running, from the console\'s own stage markers', async () => {
+    fetchMock
+      .mockResolvedValueOnce(NO_CRUMB)
+      .mockResolvedValueOnce(TRIGGERED)
+      .mockResolvedValueOnce(QUEUE_RESOLVED)
+      .mockResolvedValueOnce(textResponse(
+        '[Pipeline] { (Checkout)\n[Pipeline] { (SAST - SonarQube)\nSensor analysis\n',
+        { moreData: true, nextOffset: 80 },
+      ));
+
+    await service.triggerBuild(SETTINGS);
+    await jest.advanceTimersByTimeAsync(2000); // -> running
+    await jest.advanceTimersByTimeAsync(3000); // console poll
+
+    expect(service.getStatus().currentStage).toBe('SAST - SonarQube');
+  });
+
+  // ---- The four scanners now run as parallel branches of one 'Scans'
+  // stage (see the Jenkinsfile) rather than as separate sequential stages,
+  // so Jenkins tags their console lines with a `[Branch Name]` prefix
+  // instead of the `[Pipeline] { (Stage Name)` marker a dedicated stage
+  // gets. More than one can genuinely be running at once, so all of them
+  // touched so far - not just whichever produced the latest line - need to
+  // surface for the UI to highlight correctly.
+  it('accumulates every scanner branch active in a run, not just the most recent line', async () => {
+    fetchMock
+      .mockResolvedValueOnce(NO_CRUMB)
+      .mockResolvedValueOnce(TRIGGERED)
+      .mockResolvedValueOnce(QUEUE_RESOLVED)
+      .mockResolvedValueOnce(textResponse(
+        '[IaC - Checkov] Running shell script\n[SAST - SonarQube] Sensor analysis\n[IaC - Checkov] Finished\n',
+        { moreData: true, nextOffset: 90 },
+      ));
+
+    await service.triggerBuild(SETTINGS);
+    await jest.advanceTimersByTimeAsync(2000); // -> running
+    await jest.advanceTimersByTimeAsync(3000); // console poll
+
+    const status = service.getStatus();
+    expect(status.currentStage).toBe('IaC - Checkov'); // last line in the chunk
+    expect(status.activeStages).toEqual(expect.arrayContaining(['IaC - Checkov', 'SAST - SonarQube']));
+  });
+
+  // ---- Regression: the actual root cause behind every "fetch failed"
+  // incident this service went through, found only after logging the real
+  // underlying error instead of undici's generic wrapper message:
+  // `cause: Error: connect ECONNREFUSED 127.0.0.1:8080`. Jenkins builds the
+  // `Location` header and `executable.url`/`lastBuild.url` fields from its
+  // own configured root URL (unclassified.location.url in casc.yaml), which
+  // is correct only from the host browser's point of view - not from
+  // inside the api container, where that address is itself. Every poll
+  // after the initial trigger trusted those self-reported URLs verbatim, so
+  // once a build left the queue every single subsequent request permanently
+  // failed. This locks in that only the *path* Jenkins reports is used - the
+  // origin always comes from our own JENKINS_URL, never from Jenkins itself.
+  it("rebases Jenkins' self-reported queue and build URLs onto our own JENKINS_URL, never trusting their origin", async () => {
+    fetchMock
+      .mockResolvedValueOnce(NO_CRUMB)
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ Location: 'http://localhost:8080/queue/item/9/' }),
+      } as Response)
+      .mockResolvedValueOnce(jsonResponse({
+        executable: { number: 7, url: 'http://localhost:8080/job/threatweave-pipeline/7/' },
+      }))
+      .mockResolvedValueOnce(textResponse('progress\n', { moreData: true, nextOffset: 10 }));
+
+    await service.triggerBuild(SETTINGS);
+    await jest.advanceTimersByTimeAsync(2000); // queue poll -> running
+    await jest.advanceTimersByTimeAsync(3000); // console poll
+
+    // JENKINS_URL defaults to http://127.0.0.1:8080 when unset (as in this
+    // test process) - every call after the trigger must use that origin,
+    // never the http://localhost:8080 Jenkins claimed in its own responses.
+    for (const [url] of fetchMock.mock.calls as [string][]) {
+      expect(url.startsWith('http://localhost:8080')).toBe(false);
+    }
+    expect(service.getStatus().buildUrl).toBe('http://127.0.0.1:8080/job/threatweave-pipeline/7/');
+  });
+
+  // ---- Regression: confirmed live against a real build. Jenkins' parallel()
+  // step emits its own `[Pipeline] { (Branch: Name) }` stage marker for each
+  // branch, not just the `[Name] ...` line prefix - without stripping the
+  // "Branch: " prefix, currentStage/activeStages would come back as
+  // "Branch: SAST - SonarQube" and silently fail to match STAGE_TO_SOURCE on
+  // the frontend, leaving every chip un-highlighted despite a real scanner
+  // genuinely running.
+  it('strips the "Branch: " prefix Jenkins adds to parallel-step stage markers', async () => {
+    fetchMock
+      .mockResolvedValueOnce(NO_CRUMB)
+      .mockResolvedValueOnce(TRIGGERED)
+      .mockResolvedValueOnce(QUEUE_RESOLVED)
+      .mockResolvedValueOnce(textResponse(
+        '[Pipeline] { (Branch: IaC - Checkov)\nsome output\n',
+        { moreData: true, nextOffset: 50 },
+      ));
+
+    await service.triggerBuild(SETTINGS);
+    await jest.advanceTimersByTimeAsync(2000);
+    await jest.advanceTimersByTimeAsync(3000);
+
+    const status = service.getStatus();
+    expect(status.currentStage).toBe('IaC - Checkov');
+    expect(status.activeStages).toContain('IaC - Checkov');
   });
 
   it('reports failed with the build result when the pipeline fails', async () => {
@@ -237,19 +422,62 @@ describe('JenkinsService', () => {
     expect(status.currentActivity).toBe('still parsing files');
   });
 
-  it('gives up on a running build only after genuinely no new console output for the full stall window', async () => {
+  // ---- Regression: confirmed live. Build #18's own GitLeaks stage pegged
+  // the host's CPU heavily enough that Jenkins stopped answering HTTP
+  // requests for the *entire* 5-minute stall window, while the build itself
+  // kept running and finished successfully moments later. Treating a stall
+  // as an immediate hard failure would have abandoned a build that was
+  // never actually broken - it is now a non-fatal warning that keeps
+  // polling instead.
+  it('flags a running build as stalled (not failed) after no new console output for 5 minutes, and keeps polling', async () => {
     fetchMock
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce(TRIGGERED)
       .mockResolvedValueOnce(QUEUE_RESOLVED)
-      // Every console poll after this "succeeds" but returns nothing new -
-      // simulates a build that is truly stuck, not just slow to answer.
+      // Every console poll after this "succeeds" but returns nothing new.
       .mockResolvedValue(textResponse('', { moreData: true, nextOffset: 0 }));
 
     await service.triggerBuild(SETTINGS);
     await jest.advanceTimersByTimeAsync(2000); // -> running
 
     await jest.advanceTimersByTimeAsync(5 * 60_000); // past the 5-minute running stall limit
+
+    const status = service.getStatus();
+    expect(status.state).toBe('running');
+    expect(status.stalled).toBe(true);
+    expect(status.buildNumber).toBe(7); // still tracking the same build
+  });
+
+  it('clears the stalled flag as soon as real output resumes, without ever reaching failed', async () => {
+    fetchMock
+      .mockResolvedValueOnce(NO_CRUMB)
+      .mockResolvedValueOnce(TRIGGERED)
+      .mockResolvedValueOnce(QUEUE_RESOLVED)
+      .mockResolvedValue(textResponse('', { moreData: true, nextOffset: 0 }));
+
+    await service.triggerBuild(SETTINGS);
+    await jest.advanceTimersByTimeAsync(2000); // -> running
+    await jest.advanceTimersByTimeAsync(5 * 60_000); // now stalled
+    expect(service.getStatus().stalled).toBe(true);
+
+    fetchMock.mockResolvedValue(textResponse('[2026-08-27T20:03:12.000Z] back to work\n', { moreData: true, nextOffset: 40 }));
+    await jest.advanceTimersByTimeAsync(3000);
+
+    const status = service.getStatus();
+    expect(status.stalled).toBe(false);
+    expect(status.currentActivity).toBe('back to work');
+  });
+
+  it('truly gives up on a running build only after the much longer hard ceiling with zero output', async () => {
+    fetchMock
+      .mockResolvedValueOnce(NO_CRUMB)
+      .mockResolvedValueOnce(TRIGGERED)
+      .mockResolvedValueOnce(QUEUE_RESOLVED)
+      .mockResolvedValue(textResponse('', { moreData: true, nextOffset: 0 }));
+
+    await service.triggerBuild(SETTINGS);
+    await jest.advanceTimersByTimeAsync(2000); // -> running
+    await jest.advanceTimersByTimeAsync(40 * 60_000); // past the 40-minute hard ceiling
 
     const status = service.getStatus();
     expect(status.state).toBe('failed');
@@ -265,19 +493,30 @@ describe('JenkinsService', () => {
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
-  // ---- Regression: confirmed live, twice. This long-running process's
-  // pooled connection to Jenkins went stale (generic "fetch failed" on every
-  // subsequent request) while a brand-new process making the identical call
-  // succeeded immediately - the timeout/stall-detection above only made that
-  // visible, it didn't stop it recurring. Never reusing a connection is the
-  // actual fix.
-  it('never reuses a pooled connection, so a stale one cannot accumulate', async () => {
+  // ---- Regression: confirmed live, twice, in two different ways. First
+  // fix attempt set a `Connection: close` *header* - that is genuinely sent
+  // on the wire (verified directly against a real server), but it does not
+  // control whether undici's own dispatcher keeps the underlying socket
+  // pooled internally, and the exact same failure mode (every poll to
+  // Jenkins failing with a generic "fetch failed" for 20+ minutes straight,
+  // while a brand-new process making the identical call succeeded
+  // instantly) recurred later anyway. A dispatcher with keep-alive disabled
+  // is undici's actual mechanism for this, not a header a client can set
+  // and hope the dispatcher happens to honour.
+  it('uses a dispatcher with keep-alive disabled, so no pooled connection can go stale', async () => {
     fetchMock.mockRejectedValue(new Error('irrelevant'));
 
     await service.triggerBuild(SETTINGS);
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect((init.headers as Record<string, string>)['Connection']).toBe('close');
+    const [, init] = fetchMock.mock.calls[0] as [string, { dispatcher?: unknown }];
+    // undici's Agent does not expose its keepAliveTimeout as a public
+    // property, so the real thing being checked is "the same dispatcher
+    // instance every call" (constructed once, not a fresh one that could
+    // itself default to keep-alive) - identity across two calls proves it
+    // is the deliberately-configured one, not undici's own default agent.
+    const [, init2] = fetchMock.mock.calls[1] ?? [];
+    expect(init.dispatcher).toBeDefined();
+    if (init2) expect((init2 as { dispatcher?: unknown }).dispatcher).toBe(init.dispatcher);
   });
 
   it('describes a request timeout in plain language rather than a raw exception message', async () => {

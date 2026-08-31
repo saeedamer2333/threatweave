@@ -25,6 +25,11 @@ export const PATHS = {
   history:
     process.env.HISTORY_FILE ?? join(PROJECT_ROOT, 'findings', 'history.json'),
 
+  /** Cross-run first_seen/last_seen record, keyed by finding_identity(). */
+  firstSeen:
+    process.env.FIRST_SEEN_FILE ??
+    join(PROJECT_ROOT, 'findings', 'first_seen.json'),
+
   /** The AIOps engine package. */
   engineDir: process.env.ENGINE_DIR ?? join(PROJECT_ROOT, 'aiops_engine'),
 
@@ -38,6 +43,18 @@ export const PATHS = {
     process.env.AWS_MONITOR ??
     join(PROJECT_ROOT, 'aws_monitor', 'monitor.py'),
 
+  /** AWS connection + permission status check, used by the Settings page. */
+  awsStatusCheck:
+    process.env.AWS_STATUS_CHECK ??
+    join(PROJECT_ROOT, 'aws_monitor', 'status_check.py'),
+
   /** Python interpreter to use when invoking the engine. */
   python: process.env.PYTHON_BIN ?? 'python',
+
+  /** Where the project under test is mounted - always this literal path by
+   * convention (both docker-compose and the all-in-one image mount whatever
+   * TARGET_PATH points at, at exactly this container-internal path), unlike
+   * every other PATHS entry which is host/build-layout dependent. Used to
+   * detect what's actually mounted there for Pipeline target suggestions. */
+  target: process.env.TARGET_DIR ?? '/target',
 };

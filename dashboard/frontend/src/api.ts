@@ -7,6 +7,18 @@ import type { AiopsOutput, Suppression } from './types';
  */
 const BASE = '/api';
 
+/** Carries the HTTP status alongside the message, so callers can tell "the
+ * API is reachable but says there's nothing yet" (404, e.g. no scan has run)
+ * apart from a genuine connectivity failure - those need very different UI
+ * treatment, and a plain Error threw both away identically. */
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -20,7 +32,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* response had no JSON body */
     }
-    throw new Error(detail);
+    throw new ApiError(detail, res.status);
   }
   return res.json() as Promise<T>;
 }
@@ -31,6 +43,17 @@ export interface AwsStatus {
   arn?: string;
   region?: string;
   message?: string;
+  /** "deployment" means the failure has nothing to do with AWS credentials
+   * (a missing script, a broken path) - showing the generic "run aws
+   * configure" guidance in that case would point at the wrong fix. Absent
+   * or "credentials"/"unknown" means the generic guidance still applies. */
+  messageKind?: 'deployment' | 'credentials' | 'unknown';
+  /** Beyond "credentials are valid": can they actually read anything?
+   * sts:GetCallerIdentity needs no IAM permission at all, so `connected`
+   * alone cannot tell "valid but zero policies attached" from "fully
+   * working" - this can. */
+  permissions?: { ec2: boolean; s3: boolean; iam: boolean };
+  hasFullAccess?: boolean;
 }
 
 export interface ScanStatus {
@@ -70,6 +93,21 @@ export interface AppSettings {
   pipeline: PipelineSettings;
 }
 
+export interface DetectedTarget {
+  sourceDir: string;
+  projectName?: string;
+  hasDockerfile: boolean;
+}
+
+export interface SonarQubeStatus {
+  /** false outside the all-in-one image (split docker-compose deployment,
+   * or SONARQUBE_AUTOSTART=false) - there is nothing local to warn about. */
+  relevant: boolean;
+  healthy: boolean;
+  crashReason?: 'oom' | 'other';
+  message?: string;
+}
+
 export interface PipelineStatus {
   state: 'idle' | 'queued' | 'running' | 'success' | 'failed';
   buildNumber?: number;
@@ -78,6 +116,9 @@ export interface PipelineStatus {
   finishedAt?: string;
   error?: string;
   currentActivity?: string;
+  stalled?: boolean;
+  currentStage?: string;
+  activeStages?: string[];
 }
 
 export const api = {
@@ -85,6 +126,8 @@ export const api = {
   getSettings: () => request<AppSettings>('/settings'),
   updateSettings: (body: Partial<AppSettings>) =>
     request<AppSettings>('/settings', { method: 'PUT', body: JSON.stringify(body) }),
+  detectTarget: () => request<DetectedTarget>('/settings/detect-target'),
+  getSonarQubeStatus: () => request<SonarQubeStatus>('/settings/sonarqube-status'),
   getSuppressions: () => request<Suppression[]>('/suppressions'),
   createSuppression: (body: NewSuppression) =>
     request<Suppression>('/suppressions', { method: 'POST', body: JSON.stringify(body) }),

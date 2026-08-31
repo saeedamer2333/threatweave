@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Agent, fetch as undiciFetch, type RequestInit, type Response } from 'undici';
 import { PipelineSettings } from '../settings/settings.service';
 
 /**
@@ -39,6 +40,19 @@ const QUEUE_STALL_LIMIT_MS = 3 * 60_000;
  * built to catch went 13+ minutes with no new lines at all). */
 const RUNNING_STALL_LIMIT_MS = 5 * 60_000;
 
+/** Hitting the stall limit does not mean the build is actually dead - it
+ * has since been observed live that a scanner stage (GitLeaks walking full
+ * git history) can peg the host's CPU heavily enough that Jenkins itself
+ * stops answering HTTP requests for the *entire* stall window, while the
+ * build underneath keeps running and finishes successfully moments later.
+ * So a stall only flips the UI into a non-fatal warning (`stalled: true`,
+ * state stays 'running') and polling continues - it self-clears the moment
+ * new console output shows up. Only after this much longer ceiling with
+ * still nothing does it give up for real; kept just under the pipeline's
+ * own 45-minute `timeout()` so a genuinely dead build is not tracked
+ * forever. */
+const HARD_GIVEUP_MS = 40 * 60_000;
+
 export interface PipelineStatus {
   state: 'idle' | 'queued' | 'running' | 'success' | 'failed';
   buildNumber?: number;
@@ -50,13 +64,78 @@ export interface PipelineStatus {
    * but what it is actually doing right now (e.g. which scanner, which
    * file). Only present while a build is actively running. */
   currentActivity?: string;
+  /** No new console output for RUNNING_STALL_LIMIT_MS, but not yet given up
+   * - the build may well still be alive and just slow to respond (e.g. a
+   * CPU-heavy scanner stage starving Jenkins of the ability to answer HTTP
+   * requests). state stays 'running'; this clears itself the moment new
+   * output arrives, so the UI can show a warning without abandoning the
+   * build the way a hard 'failed' would. */
+  stalled?: boolean;
+  /** Which declared Jenkinsfile stage ("SAST - SonarQube", "Secrets -
+   * GitLeaks", ...) most recently started, parsed from the console's own
+   * `[Pipeline] { (Stage Name)` markers. Lets the UI show which scanner is
+   * actually running right now, not just a generic "Scanning...". */
+  currentStage?: string;
+  /** Every scanner that has produced output so far this run. The four
+   * scanners run as parallel branches, so more than one is often genuinely
+   * active at once - unlike currentStage (the single most recent line),
+   * this is the right signal for "which chips should show as running". */
+  activeStages?: string[];
 }
 
 @Injectable()
-export class JenkinsService {
+export class JenkinsService implements OnModuleInit {
   private readonly logger = new Logger(JenkinsService.name);
   private status: PipelineStatus = { state: 'idle' };
   private pollTimer?: ReturnType<typeof setInterval>;
+
+  /**
+   * Tracking lives only in memory - a redeploy of this container (which
+   * happens on every code change, including to this file) wipes it. Without
+   * this, that looks identical to the dashboard silently losing track of a
+   * build that is, from Jenkins' own point of view, running perfectly
+   * normally: reproduced live when redeploying mid-build left the sidebar
+   * frozen on "Scanning..." forever while Jenkins had already finished the
+   * build with SUCCESS minutes earlier. On startup, ask Jenkins what its own
+   * last build is actually doing and resume tracking it if it is still
+   * running, instead of just assuming idle.
+   */
+  async onModuleInit(): Promise<void> {
+    const attached = await this.reconcileWithJenkins();
+    if (attached) {
+      this.logger.log(`Resuming tracking of build #${this.status.buildNumber}, already running at startup`);
+    }
+  }
+
+  /**
+   * Asks Jenkins directly whether its own last build is still running, and
+   * if so, attaches this service's tracking to it. Shared by onModuleInit
+   * (this container's own state was wiped by a redeploy) and by
+   * triggerBuild's "Jenkins returned 200 but no Location header" case
+   * (see the comment there) - both are really the same situation: this
+   * service does not know what Jenkins is currently doing and needs to find
+   * out, rather than assume idle or assume failure.
+   */
+  private async reconcileWithJenkins(): Promise<boolean> {
+    try {
+      const res = await this.fetchJenkins(`${JENKINS_URL}/job/${JOB_NAME}/lastBuild/api/json`);
+      if (!res.ok) {
+        await this.drain(res);
+        return false;
+      }
+      const body = (await res.json()) as { building: boolean; number: number; url: string; timestamp: number };
+      if (!body.building) return false;
+
+      const startedAt = new Date(body.timestamp).toISOString();
+      const buildUrl = rebase(body.url);
+      this.status = { state: 'running', startedAt, buildNumber: body.number, buildUrl };
+      this.pollBuild(body.number, buildUrl, startedAt);
+      return true;
+    } catch (err) {
+      this.logger.warn(`Could not check Jenkins' last build: ${(err as Error).message}`);
+      return false;
+    }
+  }
 
   private auth(): string {
     const id = process.env.JENKINS_ADMIN_ID ?? 'admin';
@@ -65,24 +144,51 @@ export class JenkinsService {
   }
 
   /**
-   * `Connection: close` on every request, deliberately trading a little
-   * per-request overhead for never reusing a pooled connection. Confirmed
-   * live, twice: this long-running process's default keep-alive connection
-   * to Jenkins can go stale after a network blip (or, apparently, just under
-   * heavy CPU load elsewhere on the host) and then fail on every subsequent
-   * request with a generic "fetch failed" - while a brand-new process making
-   * the identical call to the identical URL succeeds immediately. The
-   * AbortSignal timeout and stall-detection above turn that into a visible,
-   * actionable failure instead of an infinite silent retry, but they were
-   * still symptom management; this addresses the actual cause by never
-   * letting a connection live long enough to go stale in the first place.
+   * A dedicated undici Agent with keep-alive disabled, so no pooled socket
+   * to Jenkins can ever accumulate staleness in the first place.
+   *
+   * The earlier attempt at this fix set a `Connection: close` *header* on
+   * Node's global fetch and looked right at the time (confirmed live, twice,
+   * that it stopped the "fetch failed" recurrence in the moment) - but that
+   * only controls what gets sent on the wire, not whether undici's own
+   * global dispatcher still pools and reuses the underlying socket
+   * internally. It resurfaced later exactly the same way: every poll to
+   * Jenkins failing with a generic "fetch failed" for 20+ minutes straight
+   * while a brand-new process making the identical call succeeded
+   * instantly - proof the connection-reuse problem, not just the header,
+   * was still there. `dispatcher` is undici's actual mechanism for this,
+   * not a header some server or client is free to ignore.
    */
+  private readonly agent = new Agent({ keepAliveTimeout: 1, keepAliveMaxTimeout: 1 });
+
   private fetchJenkins(url: string, init: RequestInit = {}): Promise<Response> {
-    return fetch(url, {
+    return undiciFetch(url, {
       ...init,
-      headers: { Authorization: this.auth(), Connection: 'close', ...init.headers },
+      headers: { Authorization: this.auth(), ...init.headers },
       signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
+      dispatcher: this.agent,
     });
+  }
+
+  /**
+   * A response whose body is never read is not actually released - it stays
+   * pinned rather than being returned to the pool (or, with keep-alive
+   * disabled, properly closed), because the stream is still "pending" from
+   * the connection's point of view. Confirmed as the real cause of the
+   * "fetch failed" recurrence after the dispatcher fix above did not stop
+   * it: several call sites here discard a response on an early return
+   * (`if (!res.ok) return`) without ever reading its body, and this process
+   * makes a request every 2-3 seconds for its entire lifetime - hours of
+   * that leaking one connection at a time explains exactly the observed
+   * pattern (fine when freshly started, failing every single request after
+   * running a while, while a brand-new process always succeeds instantly).
+   */
+  private async drain(res: Response): Promise<void> {
+    try {
+      await res.body?.cancel();
+    } catch {
+      // best-effort - the point is to not leave it unread, not to require success
+    }
   }
 
   getStatus(): PipelineStatus {
@@ -134,13 +240,29 @@ export class JenkinsService {
         },
       );
       if (!res.ok) {
+        await this.drain(res);
         throw new Error(`Jenkins returned ${res.status} triggering the build`);
       }
       const queueUrl = res.headers.get('Location');
+      await this.drain(res); // only the Location header is needed; the body is never read
       if (!queueUrl) {
-        throw new Error('Jenkins did not return a queue item location');
+        // Not necessarily a failure - confirmed live. Jenkins returns 200
+        // with no Location (instead of 201 + Location) when this request
+        // gets merged into an *existing* blocked queue item rather than
+        // creating a new one, which happens routinely with
+        // disableConcurrentBuilds() once both the cron poll and manual
+        // "Run scan" clicks can land while a build is already running: the
+        // queue item's own causes showed three TimerTrigger entries plus
+        // one UserIdCause all merged into one, "why": "Build #44 is already
+        // in progress". Reconcile with what Jenkins is actually doing
+        // before assuming the trigger failed.
+        const attached = await this.reconcileWithJenkins();
+        if (attached) {
+          return this.status;
+        }
+        throw new Error('Jenkins did not return a queue item location, and no build appears to be running to attach to');
       }
-      this.pollQueueThenBuild(queueUrl, startedAt);
+      this.pollQueueThenBuild(rebase(queueUrl), startedAt);
     } catch (err) {
       this.status = {
         state: 'failed',
@@ -175,9 +297,15 @@ export class JenkinsService {
   private async getCrumb(): Promise<{ field: string; value: string; cookie: string } | null> {
     try {
       const res = await this.fetchJenkins(`${JENKINS_URL}/crumbIssuer/api/json`);
-      if (!res.ok) return null;
+      if (!res.ok) {
+        await this.drain(res);
+        return null;
+      }
       const cookie = res.headers.get('set-cookie');
-      if (!cookie) return null;
+      if (!cookie) {
+        await this.drain(res);
+        return null;
+      }
       const body = (await res.json()) as { crumbRequestField: string; crumb: string };
       return { field: body.crumbRequestField, value: body.crumb, cookie };
     } catch {
@@ -195,7 +323,10 @@ export class JenkinsService {
       try {
         const res = await this.fetchJenkins(`${normalized}api/json`);
         lastContactAt = Date.now();
-        if (!res.ok) return;
+        if (!res.ok) {
+          await this.drain(res);
+          return;
+        }
         const body = (await res.json()) as {
           executable?: { number: number; url: string };
           cancelled?: boolean;
@@ -207,16 +338,17 @@ export class JenkinsService {
         }
         if (body.executable) {
           this.stopPolling();
+          const buildUrl = rebase(body.executable.url);
           this.status = {
             state: 'running',
             startedAt,
             buildNumber: body.executable.number,
-            buildUrl: body.executable.url,
+            buildUrl,
           };
-          this.pollBuild(body.executable.number, body.executable.url, startedAt);
+          this.pollBuild(body.executable.number, buildUrl, startedAt);
         }
       } catch (err) {
-        this.logger.warn(`Queue poll failed: ${(err as Error).message}`);
+        this.logger.warn(`Queue poll failed: ${(err as Error).message} | cause: ${describeCause(err)}`);
         if (Date.now() - lastContactAt >= QUEUE_STALL_LIMIT_MS) {
           this.stopPolling();
           const minutes = Math.round(QUEUE_STALL_LIMIT_MS / 60_000);
@@ -241,6 +373,13 @@ export class JenkinsService {
   private pollBuild(buildNumber: number, buildUrl: string, startedAt: string): void {
     let consoleOffset = 0;
     let lastProgressAt = Date.now();
+    let stallLoggedAt = 0;
+    // The four scanners run as parallel branches (see the Jenkinsfile), so
+    // more than one can genuinely be active at once - accumulated across
+    // the whole build rather than replaced each poll, so a fast scanner
+    // (Checkov, a few seconds) is not silently dropped from the list the
+    // moment a slower one (SonarQube, minutes) produces the next line.
+    const activeStages = new Set<string>();
 
     this.pollTimer = setInterval(async () => {
       try {
@@ -254,16 +393,28 @@ export class JenkinsService {
           if (chunk.trim()) {
             lastProgressAt = Date.now();
             const activity = latestLine(chunk);
-            if (activity) this.status = { ...this.status, currentActivity: activity };
+            const stage = latestStage(chunk);
+            for (const name of allStages(chunk)) activeStages.add(name);
+            this.status = {
+              ...this.status,
+              stalled: false,
+              activeStages: [...activeStages],
+              ...(activity ? { currentActivity: activity } : {}),
+              ...(stage ? { currentStage: stage } : {}),
+            };
           }
 
           if (!moreData) {
             // The console is done, but only the structured endpoint carries
             // the actual pass/fail result.
             const statusRes = await this.fetchJenkins(`${buildUrl}api/json`);
-            const body = statusRes.ok
-              ? ((await statusRes.json()) as { result: string | null })
-              : { result: null };
+            let body: { result: string | null };
+            if (statusRes.ok) {
+              body = (await statusRes.json()) as { result: string | null };
+            } else {
+              await this.drain(statusRes);
+              body = { result: null };
+            }
             this.stopPolling();
             this.status = {
               state: body.result === 'SUCCESS' ? 'success' : 'failed',
@@ -275,23 +426,42 @@ export class JenkinsService {
             };
             return;
           }
+        } else {
+          await this.drain(res);
         }
       } catch (err) {
-        this.logger.warn(`Build console poll failed: ${(err as Error).message}`);
+        this.logger.warn(`Build console poll failed: ${(err as Error).message} | cause: ${describeCause(err)}`);
       }
 
-      if (Date.now() - lastProgressAt >= RUNNING_STALL_LIMIT_MS) {
+      const silentFor = Date.now() - lastProgressAt;
+
+      if (silentFor >= HARD_GIVEUP_MS) {
         this.stopPolling();
-        const minutes = Math.round(RUNNING_STALL_LIMIT_MS / 60_000);
+        const minutes = Math.round(HARD_GIVEUP_MS / 60_000);
         this.status = {
           state: 'failed',
           startedAt,
           finishedAt: new Date().toISOString(),
           buildNumber,
           buildUrl,
-          error: `No new output from the build for over ${minutes} minute(s) - it may be stuck. The build itself may still be running; check ${buildUrl} directly.`,
+          error: `No new output from the build for over ${minutes} minute(s) - giving up. The build itself may still be running; check ${buildUrl} directly.`,
         };
         this.logger.error(`Gave up on build #${buildNumber}: no new console output for ${minutes}+ minutes`);
+        return;
+      }
+
+      if (silentFor >= RUNNING_STALL_LIMIT_MS) {
+        // Non-fatal: keep polling in the background. A build can go silent
+        // for this long simply because a CPU-heavy scanner stage (observed:
+        // GitLeaks walking a large repo's full git history) is starving
+        // Jenkins itself of the ability to answer HTTP requests, not
+        // because the build has actually stopped.
+        this.status = { ...this.status, stalled: true };
+        if (Date.now() - stallLoggedAt >= RUNNING_STALL_LIMIT_MS) {
+          stallLoggedAt = Date.now();
+          const minutes = Math.round(silentFor / 60_000);
+          this.logger.warn(`Build #${buildNumber} has been silent for ${minutes}+ minute(s) - still watching, not giving up yet`);
+        }
       }
     }, CONSOLE_POLL_MS);
   }
@@ -304,6 +474,49 @@ export class JenkinsService {
   }
 }
 
+/**
+ * Rewrite a Jenkins-supplied absolute URL (the `Location` header from
+ * triggering a build, or `executable.url`/`lastBuild.url` from its JSON
+ * API) onto our own known-reachable JENKINS_URL, keeping only the path.
+ *
+ * This is the actual root cause of the "fetch failed" incidents that kept
+ * recurring through several earlier fix attempts (a stale-connection
+ * header, a dispatcher with keep-alive disabled, draining unread response
+ * bodies - all real improvements, none of them the actual bug). Jenkins
+ * builds these URLs from its own configured root URL
+ * (`unclassified.location.url` in casc.yaml, here `http://localhost:8080/`
+ * - correct only from the host browser's point of view), not from the
+ * address a given caller used to reach it. The crumb fetch and the initial
+ * trigger POST always used our own correct JENKINS_URL directly and so
+ * always worked; every later poll trusted Jenkins' self-reported URL
+ * instead and so was, once a build left the queue, permanently trying to
+ * connect to the api container's own localhost - confirmed live via
+ * `cause: Error: connect ECONNREFUSED 127.0.0.1:8080`, not any kind of
+ * connection staleness.
+ */
+function rebase(jenkinsUrl: string): string {
+  try {
+    const path = new URL(jenkinsUrl).pathname;
+    return `${JENKINS_URL}${path}`;
+  } catch {
+    return jenkinsUrl;
+  }
+}
+
+/** undici's "fetch failed" is a generic wrapper - the actual reason (ECONNRESET,
+ * ECONNREFUSED, a DNS failure, ...) lives on `.cause` and was never being
+ * logged, which is why the repeated live incidents of this error could only
+ * ever be theorized about, not diagnosed directly. */
+function describeCause(err: unknown): string {
+  const cause = (err as { cause?: unknown })?.cause;
+  if (!cause) return 'none';
+  if (cause instanceof Error) {
+    const code = (cause as NodeJS.ErrnoException).code;
+    return `${cause.name}: ${cause.message}${code ? ` (${code})` : ''}`;
+  }
+  return String(cause);
+}
+
 /** The last non-blank line of a console chunk, with Jenkins' timestamp
  * prefix (from the `timestamps()` pipeline option) stripped, trimmed to a
  * reasonable length for a one-line UI display. */
@@ -312,4 +525,45 @@ function latestLine(chunk: string): string | null {
   if (!lines.length) return null;
   const last = lines[lines.length - 1].replace(/^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z]\s*/, '');
   return last.length > 160 ? `${last.slice(0, 160)}…` : last;
+}
+
+/** Known scanner names, both as declarative stage markers and as parallel
+ * branch labels - matched against so an unrelated bracketed prefix (a shell
+ * command echoing "[foo]", say) is never mistaken for one. */
+const KNOWN_STAGES = [
+  'SAST - SonarQube', 'Secrets - GitLeaks', 'Container - Trivy',
+  'IaC - Checkov', 'Cloud - AWS monitor',
+];
+
+/** The most recently active scanner in this chunk. Two console formats carry
+ * this: a declarative `[Pipeline] { (Stage Name)` marker when it runs as its
+ * own stage, and a `[Stage Name] ...` line prefix when it runs as a branch
+ * of a `parallel()` step instead (Jenkins tags every line of concurrent
+ * branch output this way, since several branches interleave in one log).
+ * The four scanners run as parallel branches so their reports don't have to
+ * wait on each other, so both forms need handling - the last match of
+ * either wins. */
+function latestStage(chunk: string): string | null {
+  const all = allStagesWithPositions(chunk);
+  return all.length ? all[all.length - 1].name : null;
+}
+
+/** Every distinct scanner stage/branch touched anywhere in this chunk. */
+function allStages(chunk: string): string[] {
+  return [...new Set(allStagesWithPositions(chunk).map((m) => m.name))];
+}
+
+function allStagesWithPositions(chunk: string): { index: number; name: string }[] {
+  // Jenkins' parallel() step emits its own `[Pipeline] { (Branch: Name) }`
+  // marker for each branch alongside the `[Name] ...` line-prefix form -
+  // confirmed live (`"currentStage":"Branch: IaC - Checkov"`). Stripping the
+  // prefix here, not at every call site, is what lets a plain scanner name
+  // match KNOWN_STAGES/STAGE_TO_SOURCE regardless of which of the two forms
+  // produced it.
+  const stageMarkers = [...chunk.matchAll(/\[Pipeline]\s*\{\s*\(([^)]+)\)/g)]
+    .map((m) => ({ index: m.index ?? 0, name: m[1].replace(/^Branch:\s*/, '') }));
+  const branchLines = [...chunk.matchAll(/^\[([^\]]+)]/gm)]
+    .map((m) => ({ index: m.index ?? 0, name: m[1] }))
+    .filter((m) => KNOWN_STAGES.includes(m.name));
+  return [...stageMarkers, ...branchLines].sort((a, b) => a.index - b.index);
 }

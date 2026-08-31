@@ -115,6 +115,26 @@ directory, container image, SonarQube project key) — defaults match what
 was already hardcoded in the Jenkins job, editable without touching Jenkins
 directly.
 
+**Automatic scanning on push** — scans don't have to be manually triggered.
+Jenkins polls the target every 5 minutes and skips the run entirely when
+nothing has changed, so pushes get scanned within a few minutes without
+wasting a run on an unchanged tree. For a target actually hosted on GitHub
+(on a publicly reachable host such as EC2 — GitHub cannot reach a machine on
+your local network), one command wires up the whole thing: clones the
+target, starts the stack, points the dashboard at it, creates the GitHub
+webhook itself (given a token), and kicks off the first scan.
+
+```bash
+GITHUB_TOKEN=<a token with webhook access>  \
+  ./scripts/setup-github-target.sh https://github.com/<you>/<target-repo>.git main
+```
+
+Omit `GITHUB_TOKEN` and it prints the three values (URL, secret, event) to
+paste into the GitHub UI by hand instead. From then on: push → GitHub calls
+the webhook → the receiver pulls the new commit and immediately asks the
+dashboard to scan it — no waiting on the poll, which stays in place only as
+a fallback if that call fails — with nobody touching Jenkins directly.
+
 ---
 
 ## Installation
@@ -217,26 +237,37 @@ docker run -d -p 8080:8080 -p 50000:50000 \
 
 ### Option 4 — all-in-one (single container)
 
-Jenkins, the API and the dashboard as three processes in one container,
-published as `saeedalameri/threatweave:latest` and built from the root
-[`Dockerfile`](Dockerfile). One command, fully configured through
+Jenkins, the API, the dashboard, **and SonarQube** as four processes in one
+container, published as `saeedalameri/threatweave:latest` and built from the
+root [`Dockerfile`](Dockerfile). One command, fully configured through
 environment variables — the pattern GitLab CE's all-in-one image uses:
 
 ```bash
 docker run -d --name threatweave \
-  -p 3000:80 -p 4000:4000 -p 8080:8080 -p 50000:50000 \
+  -p 3000:80 -p 4000:4000 -p 8080:8080 -p 50000:50000 -p 9000:9000 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v threatweave-jenkins-home:/var/jenkins_home \
   -v threatweave-findings:/workspace/findings \
   saeedalameri/threatweave:latest
 ```
 
-Dashboard on `:3000`, API directly on `:4000`, Jenkins on `:8080` — all
-reachable immediately, and `POST /api/scan` (or clicking "Run scan" in the
-dashboard) works out of the box against the baked-in sample findings, same
-as the split API image. Both volumes are optional but recommended: without
-them, Jenkins configuration and scan history reset on every container
-recreation.
+Dashboard on `:3000`, API directly on `:4000`, Jenkins on `:8080`, SonarQube
+on `:9000` — all reachable immediately, and `POST /api/scan` (or clicking
+"Run scan" in the dashboard) works out of the box against the baked-in
+sample findings, same as the split API image. Both volumes are optional but
+recommended: without them, Jenkins configuration and scan history reset on
+every container recreation.
+
+**SonarQube is included and fully self-configuring by default** — on first
+boot the container replaces its default `admin`/`admin` credentials with a
+random password (printed once in the container logs — `docker logs
+threatweave`), generates an analysis token, and wires both into the Jenkins
+job automatically. No browser, no manual setup: the very first "Run scan"
+already includes real SAST results. This needs real memory (SonarQube alone
+wants ~3GB, on top of what Jenkins/API/dashboard need) — set
+`-e SONARQUBE_AUTOSTART=false` to skip it entirely on a smaller host; SAST
+just shows "skipped" in that case, same as it would with `SONAR_HOST_URL`
+unset in the split setup.
 
 Everything below is a real environment variable this image reads — set
 whichever apply with `-e NAME=value`:
@@ -245,12 +276,12 @@ whichever apply with `-e NAME=value`:
 |---|---|---|
 | `JENKINS_ADMIN_ID` | `admin` | Jenkins login username |
 | `JENKINS_ADMIN_PASSWORD` | `admin` | Jenkins login password — **change this for anything but local use** |
-| `SONAR_HOST_URL` | unset | SonarQube server for the SAST stage (run one separately and point here to enable it) |
-| `SONAR_TOKEN` | unset | SonarQube analysis token, paired with the above |
+| `SONARQUBE_AUTOSTART` | `true` | Whether the bundled SonarQube runs at all — `false` disables it (saves ~3GB RAM); SAST is skipped, not failed |
+| `SONAR_HOST_URL` / `SONAR_TOKEN` | auto-generated | Set these yourself instead to point at an *external* SonarQube (e.g. one from the split setup) rather than the bundled one — leave `SONARQUBE_AUTOSTART=false` in that case |
 | `PORT` | `4000` | Port the API process listens on inside the container |
 | `PYTHON_BIN` | `python3` | Interpreter the API shells out to for the engine |
-| `FINDINGS_DIR` / `AIOPS_OUTPUT` / `HISTORY_FILE` | under `/workspace/findings` | Where the engine reads/writes its output |
-| `ENGINE_DIR` / `AWS_MONITOR` | under `/workspace` | Where the API finds the Python engine and AWS monitor scripts |
+| `FINDINGS_DIR` / `AIOPS_OUTPUT` / `HISTORY_FILE` / `FIRST_SEEN_FILE` | under `/workspace/findings` | Where the engine reads/writes its output |
+| `ENGINE_DIR` / `AWS_MONITOR` / `AWS_STATUS_CHECK` | under `/workspace` | Where the API finds the Python engine and AWS monitor scripts |
 
 AWS credentials: mount `~/.aws` read-only (`-v ~/.aws:/root/.aws:ro`) rather
 than setting keys as environment variables — the dashboard's Settings page
@@ -267,10 +298,27 @@ pipeline to actually run — see the trade-off note below and
 **The honest trade-off**, stated in the Dockerfile too: one container means
 one thing to restart for any change, and Jenkins' need for host-level
 Docker-socket access now sits in the same container as the web-facing
-dashboard/API rather than isolated on its own. Prefer Option 2/3
-(docker-compose or the split images) for independent restarts, smaller
-per-service images, or that isolation; use this option when a single
-`docker run` matters more than either.
+dashboard/API rather than isolated on its own. Bundling SonarQube also makes
+this a genuinely large image (~5.7GB, since it carries a second full JRE
+alongside Jenkins' own — SonarQube's latest releases need a newer Java than
+the Jenkins base image ships, confirmed live — plus SonarQube's own
+distribution; language analyzers this project never scans, e.g. Java, Go,
+Kotlin, PHP, are stripped at build time, but Python/JS/TS support alone is
+still substantial) and a real RAM floor once `SONARQUBE_AUTOSTART` is left
+at its default — SonarQube's three internal JVMs (web/compute-engine/search)
+can be capped lower via `SONAR_WEB_JAVAOPTS`/`SONAR_CE_JAVAOPTS`/
+`SONAR_SEARCH_JAVAOPTS` if the host is tight on memory (the image already
+trims `web`/`ce` from SonarQube's stock 512m to 384m by default; `search`,
+the bundled Elasticsearch, is left untouched since it has a real minimum
+below which it won't reliably boot). **If it does run out of memory
+anyway**, the dashboard's Settings page detects this specifically (not just
+"the scan failed") and explains both real fixes — give the container more
+memory, or disable it with `SONARQUBE_AUTOSTART=false` — rather than
+leaving an opaque SAST failure as the only symptom. Prefer Option 2/3
+(docker-compose or the split images) for independent restarts, a smaller
+image, or that process isolation; use this option when a
+single `docker run` with zero manual SonarQube setup matters more than
+either.
 
 ### Running pieces directly
 

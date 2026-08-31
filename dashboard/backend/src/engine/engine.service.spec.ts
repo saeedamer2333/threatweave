@@ -6,8 +6,10 @@ jest.mock('../config/paths', () => ({
     findingsDir: '/fake/findings',
     aiopsOutput: '/fake/findings/aiops-output.json',
     history: '/fake/findings/history.json',
+    firstSeen: '/fake/findings/first_seen.json',
     projectRoot: '/fake',
     awsMonitor: '/fake/aws_monitor/monitor.py',
+    awsStatusCheck: '/fake/aws_monitor/status_check.py',
   },
 }));
 
@@ -34,7 +36,7 @@ describe('EngineService', () => {
   });
 
   describe('startScan', () => {
-    it('passes explicit --input/--output/--history so it re-scores the real scan-inputs, not the bundled sample fixtures', () => {
+    it('passes explicit --input/--output/--history/--first-seen so it re-scores the real scan-inputs, not the bundled sample fixtures', () => {
       // Regression: engine.py's own argparse defaults point at
       // aiops_engine/sample_inputs/ - the demo fixtures - so calling it with
       // no arguments (as this used to) silently re-scores sample data
@@ -52,6 +54,7 @@ describe('EngineService', () => {
           '--input', join('/fake/findings', 'scan-inputs'),
           '--output', '/fake/findings/aiops-output.json',
           '--history', '/fake/findings/history.json',
+          '--first-seen', '/fake/findings/first_seen.json',
         ],
         expect.objectContaining({ cwd: '/fake/aiops_engine' }),
       );
@@ -91,6 +94,42 @@ describe('EngineService', () => {
         expect(status.error).toContain('exited with code 1');
         resolve(undefined);
       }));
+    });
+  });
+
+  describe('getAwsStatus', () => {
+    it('runs status_check.py and returns its parsed JSON, including the permission breakdown', async () => {
+      const child = fakeChild();
+      mockSpawn.mockReturnValue(child as never);
+
+      const promise = service.getAwsStatus();
+      child.stdout.emit('data', Buffer.from(JSON.stringify({
+        connected: true, account: '111122223333', arn: 'arn:aws:iam::111122223333:user/test',
+        region: 'us-east-1', permissions: { ec2: true, s3: false, iam: true }, hasFullAccess: false,
+      }) + '\n'));
+      child.emit('close', 0);
+
+      const result = await promise;
+
+      expect(mockSpawn).toHaveBeenCalledWith(
+        'python3', ['/fake/aws_monitor/status_check.py'], expect.objectContaining({ cwd: '/fake' }),
+      );
+      expect(result.connected).toBe(true);
+      expect(result.hasFullAccess).toBe(false);
+      expect(result.permissions).toEqual({ ec2: true, s3: false, iam: true });
+    });
+
+    it('reports not connected, rather than throwing, when the script itself fails to run', async () => {
+      const child = fakeChild();
+      mockSpawn.mockReturnValue(child as never);
+
+      const promise = service.getAwsStatus();
+      child.emit('close', 1);
+
+      const result = await promise;
+
+      expect(result.connected).toBe(false);
+      expect(result.message).toContain('exited with code 1');
     });
   });
 });

@@ -23,22 +23,28 @@ def _f(**kwargs) -> Finding:
 # ---- S_asset: deterministic exposure bands --------------------------------
 
 def test_s_asset_publicly_reachable_scores_1_0():
-    assert scorer._s_asset(_f(internet_facing=True)) == 1.0
+    evidence: dict = {}
+    assert scorer._s_asset(_f(internet_facing=True), evidence) == 1.0
+    assert evidence["asset_basis"] == "internet_facing"
 
 
 def test_s_asset_reachable_via_exposure_scores_0_6():
-    assert scorer._s_asset(_f(internet_facing=False, reachable_via_exposure=True)) == 0.6
+    evidence: dict = {}
+    assert scorer._s_asset(_f(internet_facing=False, reachable_via_exposure=True), evidence) == 0.6
+    assert evidence["asset_basis"] == "reachable_via_exposure"
 
 
 def test_s_asset_no_established_route_scores_0_3():
-    assert scorer._s_asset(_f(internet_facing=False, reachable_via_exposure=False)) == 0.3
+    evidence: dict = {}
+    assert scorer._s_asset(_f(internet_facing=False, reachable_via_exposure=False), evidence) == 0.3
+    assert evidence["asset_basis"] == "no_route"
 
 
 def test_s_asset_first_hand_evidence_takes_priority_over_inherited():
     """A finding that is itself the exposure must score 1.0 even if it also
     happens to carry reachable_via_exposure=True from a prior propagation."""
     f = _f(internet_facing=True, reachable_via_exposure=True)
-    assert scorer._s_asset(f) == 1.0
+    assert scorer._s_asset(f, {}) == 1.0
 
 
 # ---- Confidence tiering, derived from P_RF alone --------------------------
@@ -98,8 +104,10 @@ def test_propagate_exposure_does_not_overwrite_first_hand_exposure():
 def test_score_combines_all_four_weighted_signals(monkeypatch):
     monkeypatch.setattr(scorer.rf_predict, "predict_p_rf", lambda title, desc: 0.9)
     monkeypatch.setattr(scorer.rf_predict, "is_available", lambda: True)
+    monkeypatch.setattr(scorer.rf_predict, "explain_p_rf", lambda *a, **k: [])
     monkeypatch.setattr(scorer.retrieval, "retrieve_score", lambda q: 0.5)
     monkeypatch.setattr(scorer.retrieval, "is_available", lambda: True)
+    monkeypatch.setattr(scorer.retrieval, "explain_matches", lambda *a, **k: [])
     monkeypatch.setattr(scorer.epss_api, "scores_for", lambda cve_ids: {})
 
     finding = _f(internet_facing=True, cve_id=None)   # S_asset = 1.0, S_EPSS = 0.0 (no CVE)
@@ -117,12 +125,14 @@ def test_score_falls_back_to_cvss_when_rf_model_unavailable(monkeypatch):
     monkeypatch.setattr(scorer.rf_predict, "is_available", lambda: False)
     monkeypatch.setattr(scorer.retrieval, "retrieve_score", lambda q: 0.5)
     monkeypatch.setattr(scorer.retrieval, "is_available", lambda: True)
+    monkeypatch.setattr(scorer.retrieval, "explain_matches", lambda *a, **k: [])
     monkeypatch.setattr(scorer.epss_api, "scores_for", lambda cve_ids: {})
 
     finding = _f(cvss_score=8.0)
     result = scorer.score([finding])[0]
 
     assert result.scores["P_RF"] == 0.8          # 8.0 / 10.0
+    assert result.score_evidence["p_rf_basis"] == "cvss"
 
 
 def test_score_falls_back_to_severity_when_no_cvss_and_no_model(monkeypatch):
@@ -137,13 +147,17 @@ def test_score_falls_back_to_severity_when_no_cvss_and_no_model(monkeypatch):
 
     assert result.scores["P_RF"] == 0.95          # _SEV_BASE["CRITICAL"]
     assert result.scores["S_retrieval"] == 0.95
+    assert result.score_evidence["p_rf_basis"] == "severity"
+    assert result.score_evidence["retrieval_basis"] == "severity"
 
 
 def test_score_looks_up_epss_by_uppercased_cve_id(monkeypatch):
     monkeypatch.setattr(scorer.rf_predict, "predict_p_rf", lambda title, desc: 0.5)
     monkeypatch.setattr(scorer.rf_predict, "is_available", lambda: True)
+    monkeypatch.setattr(scorer.rf_predict, "explain_p_rf", lambda *a, **k: [])
     monkeypatch.setattr(scorer.retrieval, "retrieve_score", lambda q: 0.5)
     monkeypatch.setattr(scorer.retrieval, "is_available", lambda: True)
+    monkeypatch.setattr(scorer.retrieval, "explain_matches", lambda *a, **k: [])
     monkeypatch.setattr(scorer.epss_api, "scores_for",
                          lambda cve_ids: {"CVE-2021-44228": 0.97})
 
@@ -151,3 +165,71 @@ def test_score_looks_up_epss_by_uppercased_cve_id(monkeypatch):
     result = scorer.score([finding])[0]
 
     assert result.scores["S_EPSS"] == 0.97
+    assert result.score_evidence["epss_available"] is True
+
+
+def test_score_reports_epss_unavailable_when_the_cve_has_no_epss_entry(monkeypatch):
+    monkeypatch.setattr(scorer.rf_predict, "predict_p_rf", lambda title, desc: 0.5)
+    monkeypatch.setattr(scorer.rf_predict, "is_available", lambda: True)
+    monkeypatch.setattr(scorer.rf_predict, "explain_p_rf", lambda *a, **k: [])
+    monkeypatch.setattr(scorer.retrieval, "retrieve_score", lambda q: 0.5)
+    monkeypatch.setattr(scorer.retrieval, "is_available", lambda: True)
+    monkeypatch.setattr(scorer.retrieval, "explain_matches", lambda *a, **k: [])
+    monkeypatch.setattr(scorer.epss_api, "scores_for", lambda cve_ids: {})  # no entry at all
+
+    finding = _f(cve_id="CVE-2021-44228")
+    result = scorer.score([finding])[0]
+
+    assert result.scores["S_EPSS"] == 0.0
+    assert result.score_evidence["epss_available"] is False
+
+
+# ---- score_evidence: real per-finding reasoning, not just the formula -----
+
+def test_score_carries_the_rf_models_top_contributing_terms_for_this_finding(monkeypatch):
+    monkeypatch.setattr(scorer.rf_predict, "predict_p_rf", lambda title, desc: 0.9)
+    monkeypatch.setattr(scorer.rf_predict, "is_available", lambda: True)
+    monkeypatch.setattr(scorer.rf_predict, "explain_p_rf",
+                         lambda title, desc: [{"term": "sql injection", "source": "description", "weight": 0.12}])
+    monkeypatch.setattr(scorer.retrieval, "retrieve_score", lambda q: 0.5)
+    monkeypatch.setattr(scorer.retrieval, "is_available", lambda: True)
+    monkeypatch.setattr(scorer.retrieval, "explain_matches", lambda *a, **k: [])
+    monkeypatch.setattr(scorer.epss_api, "scores_for", lambda cve_ids: {})
+
+    result = scorer.score([_f()])[0]
+
+    assert result.score_evidence["p_rf_basis"] == "model"
+    assert result.score_evidence["p_rf_terms"] == [{"term": "sql injection", "source": "description", "weight": 0.12}]
+
+
+def test_score_carries_the_nearest_known_cves_this_findings_text_resembles(monkeypatch):
+    monkeypatch.setattr(scorer.rf_predict, "predict_p_rf", lambda title, desc: 0.5)
+    monkeypatch.setattr(scorer.rf_predict, "is_available", lambda: True)
+    monkeypatch.setattr(scorer.rf_predict, "explain_p_rf", lambda *a, **k: [])
+    monkeypatch.setattr(scorer.retrieval, "retrieve_score", lambda q: 0.7)
+    monkeypatch.setattr(scorer.retrieval, "is_available", lambda: True)
+    monkeypatch.setattr(scorer.retrieval, "explain_matches",
+                         lambda q, k=3: [("CVE-2021-44228", 8.4), ("CVE-2019-11510", 6.1)])
+    monkeypatch.setattr(scorer.epss_api, "scores_for", lambda cve_ids: {})
+
+    result = scorer.score([_f()])[0]
+
+    assert result.score_evidence["retrieval_basis"] == "corpus"
+    assert result.score_evidence["retrieval_matches"] == [
+        {"id": "CVE-2021-44228", "similarity": 8.4},
+        {"id": "CVE-2019-11510", "similarity": 6.1},
+    ]
+
+
+def test_score_carries_which_asset_exposure_band_applied_and_why(monkeypatch):
+    monkeypatch.setattr(scorer.rf_predict, "predict_p_rf", lambda title, desc: 0.5)
+    monkeypatch.setattr(scorer.rf_predict, "is_available", lambda: True)
+    monkeypatch.setattr(scorer.rf_predict, "explain_p_rf", lambda *a, **k: [])
+    monkeypatch.setattr(scorer.retrieval, "retrieve_score", lambda q: 0.5)
+    monkeypatch.setattr(scorer.retrieval, "is_available", lambda: True)
+    monkeypatch.setattr(scorer.retrieval, "explain_matches", lambda *a, **k: [])
+    monkeypatch.setattr(scorer.epss_api, "scores_for", lambda cve_ids: {})
+
+    result = scorer.score([_f(source="trivy", reachable_via_exposure=True)])[0]
+
+    assert result.score_evidence["asset_basis"] == "reachable_via_exposure"

@@ -3,6 +3,9 @@
 #   docker compose up -d                    Jenkins + dashboard
 #   docker compose --profile sast up -d     also start SonarQube (needs ~3GB RAM)
 #   docker compose --profile demo up -d     also run the Juice Shop demo target
+#   docker compose --profile webhook up -d  also keep a real GitHub target in
+#                                            sync via a webhook (needs a
+#                                            publicly reachable host, e.g. EC2)
 #
 # The project directory is mounted into Jenkins at /workspace so the pipeline
 # runs against this checkout, and the findings directory is shared with the
@@ -84,9 +87,11 @@ services:
       FINDINGS_DIR: /data/findings
       AIOPS_OUTPUT: /data/findings/aiops-output.json
       HISTORY_FILE: /data/findings/history.json
+      FIRST_SEEN_FILE: /data/findings/first_seen.json
       ENGINE_DIR: /data/aiops_engine
       SUPPRESSION_RULES: /data/aiops_engine/suppression_rules.json
       AWS_MONITOR: /data/aws_monitor/monitor.py
+      AWS_STATUS_CHECK: /data/aws_monitor/status_check.py
       PYTHON_BIN: python3
       # Lets the dashboard's "Run scan" trigger the real Jenkins pipeline
       # (see dashboard/backend/src/pipeline/) rather than only re-scoring
@@ -98,6 +103,10 @@ services:
     volumes:
       - .:/data
       - ${HOME}/.aws:/root/.aws:ro
+      # Read-only, same mount point Jenkins gets - lets the API inspect what's
+      # actually mounted there (e.g. a package.json name) to suggest real
+      # Pipeline target defaults instead of leaving them pinned to the demo.
+      - ${TARGET_PATH:-./demo-app}:/target:ro
 
   dashboard:
     build:
@@ -141,6 +150,45 @@ services:
     restart: unless-stopped
     ports:
       - "3001:3000"
+
+  # ---- optional: GitHub webhook receiver for a real, GitHub-hosted target
+  # Only relevant when TARGET_PATH is a real git clone you want kept in sync
+  # with a GitHub repo (typically on a publicly reachable host, e.g. EC2 -
+  # GitHub cannot reach a machine behind NAT/localhost). On a push to
+  # WEBHOOK_BRANCH, it runs `git pull` in that clone, then immediately calls
+  # the dashboard API's own /api/pipeline/run - the same endpoint "Run scan"
+  # uses - so a push is scanned within seconds. The pipeline's own cron poll
+  # (see the Jenkinsfile) still runs regardless, as a fallback if that call
+  # fails for any reason; this receiver never touches Jenkins' own
+  # configuration either way.
+  github-webhook:
+    image: python:3.12-alpine
+    container_name: threatweave-github-webhook
+    profiles: ["webhook"]
+    restart: unless-stopped
+    command: ["python3", "/app/github-webhook-receiver.py"]
+    ports:
+      - "${WEBHOOK_PORT:-9000}:9000"
+    environment:
+      # Deliberately a soft default here, not `:?required` - Compose
+      # interpolates every service's environment at `docker compose config`
+      # time regardless of which profile is active, so a hard requirement on
+      # a profile-gated service would break the *default* (non-webhook)
+      # `docker compose up` for everyone. An empty secret is instead caught
+      # at runtime by the receiver script itself, which refuses all requests
+      # and logs a clear warning rather than silently accepting anything.
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+      WEBHOOK_BRANCH: ${WEBHOOK_BRANCH:-refs/heads/main}
+      TARGET_DIR: /target
+      PORT: "9000"
+    volumes:
+      - ./scripts/github-webhook-receiver.py:/app/github-webhook-receiver.py:ro
+      # Writable, unlike the jenkins/api services' :ro mount of the same
+      # path - this is the one place allowed to change the checkout, since
+      # `git pull` is the entire point of this service. Same default as
+      # every other service's TARGET_PATH mount, for the same interpolation
+      # reason as WEBHOOK_SECRET above.
+      - ${TARGET_PATH:-./demo-app}:/target
 
 volumes:
   jenkins-home:

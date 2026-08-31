@@ -1,10 +1,26 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { AiopsOutput, Finding, Cluster, HistoryPoint, Suppression, SourceStatus } from './types';
-import { api, type PipelineStatus, type NewSuppression, type AwsStatus, type AppSettings } from './api';
-import { healthLabel, dirGlob, filterFindings, formatElapsed } from './lib';
+import { api, ApiError, type PipelineStatus, type NewSuppression, type AwsStatus, type AppSettings, type DetectedTarget, type SonarQubeStatus } from './api';
+import { healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge } from './lib';
 import './App.css';
 
 type View = 'overview' | 'findings' | 'clusters' | 'history' | 'settings';
+
+/** Placeholder shown in place of real scan output before any scan has ever
+ * completed - so the dashboard's actual structure (nav, Settings, zeroed-out
+ * stat cards) renders immediately instead of the entire page being replaced
+ * by a wall of text. Settings in particular has nothing to do with scan
+ * results at all (AWS status, pipeline target, suppression rules), so there
+ * is no real reason it should be unreachable just because no scan has run
+ * yet. `sources`/`history` stay undefined rather than `[]` so their own
+ * "nothing to show" guards (`data.sources &&`, `data.history?.length > 1`)
+ * skip rendering those specific blocks entirely instead of rendering an
+ * empty version of them. */
+const EMPTY_OUTPUT: AiopsOutput = {
+  run_id: '', generated_at: '', health_score: 0,
+  summary: { raw_findings: 0, after_dedup: 0, reduction_pct: 0, clusters: 0, critical: 0, high: 0, medium: 0, low: 0, suppressed: 0 },
+  clusters: [], findings: [], suppressions: [],
+};
 
 const NAV: { id: View; label: string; icon: string }[] = [
   { id: 'overview', label: 'Overview', icon: 'M3 12l9-9 9 9M5 10v10h5v-6h4v6h5V10' },
@@ -16,14 +32,17 @@ const NAV: { id: View; label: string; icon: string }[] = [
 
 export default function App() {
   const [data, setData] = useState<AiopsOutput | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Error | null>(null);
   const [view, setView] = useState<View>('overview');
   const [scan, setScan] = useState<PipelineStatus | null>(null);
+
+  const noScanYet = error instanceof ApiError && error.status === 404;
+  const effectiveData = data ?? (noScanYet ? EMPTY_OUTPUT : null);
 
   const load = useCallback(() => {
     api.getFindings()
       .then((d) => { setData(d); setError(null); })
-      .catch((e: Error) => setError(e.message));
+      .catch((e: Error) => setError(e));
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -31,7 +50,12 @@ export default function App() {
   // "Run scan" triggers the real Jenkins pipeline (scanners -> engine), not
   // just a re-score of old data - queued and running both need polling,
   // since a build can sit queued for a moment before an executor picks it up.
-  const scanInFlight = scan?.state === 'queued' || scan?.state === 'running';
+  // 'starting' covers the gap between the click and triggerBuild()'s response
+  // landing (a crumb fetch + a POST to Jenkins, which can itself take a
+  // couple of seconds) - without it the button just sits there looking
+  // unclicked until that round trip resolves.
+  const [starting, setStarting] = useState(false);
+  const scanInFlight = starting || scan?.state === 'queued' || scan?.state === 'running';
   useEffect(() => {
     if (!scanInFlight) return;
     const timer = setInterval(async () => {
@@ -40,17 +64,33 @@ export default function App() {
         setScan(status);
         if (status.state === 'success' || status.state === 'failed') load();
       } catch {
-        clearInterval(timer);
+        // A single failed poll (e.g. the api container restarting) is not a
+        // reason to give up forever - that used to stop this interval
+        // permanently, leaving the sidebar stuck on "Scanning..." counting
+        // up indefinitely with no further checks ever happening again. Just
+        // skip this tick and let the next one retry.
       }
     }, 2000);
     return () => clearInterval(timer);
   }, [scanInFlight, load]);
 
+  // Separate from `error` (which is about *fetching findings* and, for a
+  // real failure, blocks the whole page) - a failed trigger here means
+  // Jenkins itself couldn't be reached or rejected the request, which has
+  // nothing to do with whatever findings are already on screen. Reusing
+  // `error` used to blank out the entire dashboard just because clicking
+  // "Run scan" failed, hiding results the user was still looking at.
+  const [scanError, setScanError] = useState<string | null>(null);
+
   const runScan = async () => {
+    setStarting(true);
+    setScanError(null);
     try {
       setScan(await api.runPipeline());
     } catch (e) {
-      setError((e as Error).message);
+      setScanError((e as Error).message);
+    } finally {
+      setStarting(false);
     }
   };
 
@@ -98,7 +138,7 @@ export default function App() {
         <div className="side-foot">
           <button className="scan-btn" onClick={runScan} disabled={scanInFlight}>
             {scanInFlight ? (
-              <><span className="spinner" /> {scan?.state === 'queued' ? 'Queued…' : 'Scanning…'} {elapsedLabel && <span className="scan-elapsed">{elapsedLabel}</span>}</>
+              <><span className="spinner" /> {starting ? 'Starting…' : scan?.state === 'queued' ? 'Queued…' : 'Scanning…'} {elapsedLabel && <span className="scan-elapsed">{elapsedLabel}</span>}</>
             ) : (
               <>
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -112,23 +152,55 @@ export default function App() {
             <span className="scan-activity" title={scan.currentActivity}>{scan.currentActivity}</span>
           )}
           {scan?.state === 'failed' && <span className="scan-err">Scan failed</span>}
+          {scanError && <span className="scan-err" title={scanError}>Could not start scan: {scanError}</span>}
           {scan?.buildNumber && <span className="run-chip">Build #{scan.buildNumber}</span>}
           {data && <span className="run-chip">Run {data.run_id}</span>}
         </div>
       </aside>
 
       <main className="main">
-        {error && (
+        {/* A 404 from /findings means the API is reachable and working fine -
+            it's just telling us no scan has run in this deployment yet. That
+            is a normal, expected first-run state, not a failure - the rest
+            of the dashboard (Settings above all, which has nothing to do
+            with scan results) should stay fully usable, not be replaced by
+            a wall of text. So this renders as a dismissable-feeling banner
+            above the real page, not instead of it. */}
+        {noScanYet && (
+          <div className="welcome-banner">
+            <div className="welcome-text">
+              <strong>No scan results yet</strong>
+              <span>Everything below is showing its normal layout with no data yet. Run the pipeline to see real findings.</span>
+            </div>
+            <button className="btn-primary" onClick={runScan} disabled={scanInFlight}>Run scan</button>
+          </div>
+        )}
+        {/* A genuine connectivity failure (API container down, wrong port,
+            etc.) is different from the above - nothing on the page can be
+            trusted without a working API, so this one does block the page. */}
+        {error && !noScanYet && (
           <div className="state">
-            <p>Could not reach the API: {error}</p>
+            <p>Could not reach the API: {error.message}</p>
             <span className="empty-sub">Is the NestJS backend running on port 4000?</span>
           </div>
         )}
         {!error && !data && <div className="state">Loading findings…</div>}
-        {!error && data && scan?.state === 'failed' && (
+        {scan?.state === 'failed' && (
           <ScanFailureBanner scan={scan} onDismiss={() => setScan(null)} />
         )}
-        {data && <Content view={view} data={data} onGoto={setView} onReload={load} />}
+        {scanInFlight && scan?.stalled && (
+          <ScanStalledBanner scan={scan} />
+        )}
+        {effectiveData && (
+          <Content
+            view={view}
+            data={effectiveData}
+            onGoto={setView}
+            onReload={load}
+            scan={scanInFlight ? scan : null}
+            elapsedLabel={elapsedLabel}
+          />
+        )}
       </main>
     </div>
   );
@@ -174,10 +246,41 @@ function ScanFailureBanner({ scan, onDismiss }: { scan: PipelineStatus; onDismis
   );
 }
 
+/* ---------- Scan quiet but not dead: still polling, not a failure ---------- */
+function ScanStalledBanner({ scan }: { scan: PipelineStatus }) {
+  return (
+    <div className="scan-fail-banner scan-fail-banner-warn">
+      <div className="scan-fail-icon">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="9" /><path d="M12 7v6M12 16h.01" />
+        </svg>
+      </div>
+      <div className="scan-fail-body">
+        <span className="scan-fail-title">
+          Build has gone quiet, still watching
+          {scan.buildNumber && <span className="scan-fail-build">Build #{scan.buildNumber}</span>}
+        </span>
+        <p className="scan-fail-detail">
+          No new output in a while - often just a CPU-heavy scanner stage keeping Jenkins too
+          busy to answer. Still polling; this clears itself as soon as it responds again.
+        </p>
+      </div>
+      <div className="scan-fail-actions">
+        {scan.buildUrl && (
+          <a className="btn-ghost small" href={scan.buildUrl} target="_blank" rel="noreferrer">
+            View in Jenkins ↗
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const;
 
-function Content({ view, data, onGoto, onReload }: {
+function Content({ view, data, onGoto, onReload, scan, elapsedLabel }: {
   view: View; data: AiopsOutput; onGoto: (v: View) => void; onReload: () => void;
+  scan: PipelineStatus | null; elapsedLabel: string | null;
 }) {
   const health = healthLabel(data.health_score);
   const [query, setQuery] = useState('');
@@ -201,7 +304,14 @@ function Content({ view, data, onGoto, onReload }: {
     return (
       <>
         {header('Overview', 'Security posture for the latest pipeline run')}
-        {data.sources && <DataSources sources={data.sources} />}
+        {/* The live "scanning now" progress banner inside DataSources should
+            show whenever a scan is actually running, even before this
+            deployment's very first scan has ever completed - gating the
+            whole component on `data.sources` (only populated by a completed
+            run) made the very first scan look like nothing was happening,
+            even though the sidebar's own spinner/elapsed timer confirmed it
+            was. Only the per-tool chip row genuinely needs prior data. */}
+        {(data.sources || scan) && <DataSources sources={data.sources ?? []} scan={scan} elapsedLabel={elapsedLabel} />}
         <section className="grid">
           <div className={`card health ${health.cls}`}>
             <span className="card-label">Health Score</span>
@@ -235,16 +345,28 @@ function Content({ view, data, onGoto, onReload }: {
           </div>
         </section>
 
-        {data.history && data.history.length > 1 && (
-          <section className="block">
-            <div className="block-head"><h2>Health Trend</h2><button className="link-btn" onClick={() => onGoto('history')}>Details →</button></div>
-            <div className="card chart-card"><TrendChart points={data.history} /></div>
-          </section>
-        )}
+        <section className="block">
+          <div className="two-col">
+            {data.history && data.history.length > 1 && (
+              <div className="col-wide">
+                <div className="block-head"><h2>Health Trend</h2><button className="link-btn" onClick={() => onGoto('history')}>Details →</button></div>
+                <div className="card chart-card"><TrendChart points={data.history} /></div>
+              </div>
+            )}
+            <div>
+              <div className="block-head"><h2>Findings by Severity</h2><button className="link-btn" onClick={() => onGoto('findings')}>View all →</button></div>
+              <div className="card chart-card"><SeverityDonut summary={data.summary} /></div>
+            </div>
+          </div>
+        </section>
 
         <section className="block">
           <div className="block-head"><h2>Top Attack Path</h2><button className="link-btn" onClick={() => onGoto('clusters')}>View all →</button></div>
-          {data.clusters.slice(0, 1).map((c) => <ClusterCard key={c.cluster_id} c={c} findingById={findingById} />)}
+          {data.clusters.length === 0 ? (
+            <div className="card donut-empty">No attack paths yet - these appear once findings across sources correlate to the same asset.</div>
+          ) : (
+            data.clusters.slice(0, 1).map((c) => <ClusterCard key={c.cluster_id} c={c} findingById={findingById} />)
+          )}
         </section>
       </>
     );
@@ -254,7 +376,15 @@ function Content({ view, data, onGoto, onReload }: {
     return (
       <>
         {header('Attack Paths', 'Findings correlated across code, container and cloud')}
-        {data.clusters.map((c) => <ClusterCard key={c.cluster_id} c={c} findingById={findingById} defaultOpen />)}
+        {data.clusters.length === 0 ? (
+          <div className="card donut-empty">
+            {data.findings.length === 0
+              ? 'No scan has run yet - attack paths will appear here once one completes.'
+              : 'No attack paths in this run - findings correlate into a path when they share the same asset across sources.'}
+          </div>
+        ) : (
+          data.clusters.map((c) => <ClusterCard key={c.cluster_id} c={c} findingById={findingById} defaultOpen />)
+        )}
       </>
     );
   }
@@ -312,7 +442,9 @@ function Content({ view, data, onGoto, onReload }: {
             </thead>
             <tbody>
               {sortedFindings.length === 0 && (
-                <tr><td colSpan={7} className="no-results">No findings match your filters.</td></tr>
+                <tr><td colSpan={7} className="no-results">
+                  {data.findings.length === 0 ? 'No scan has run yet - findings will appear here once one completes.' : 'No findings match your filters.'}
+                </td></tr>
               )}
               {sortedFindings.map((f: Finding) => {
                 const isOpen = expanded === f.id;
@@ -390,14 +522,27 @@ function SettingsPanel({ data, onReload }: { data: AiopsOutput; onReload: () => 
   const [scanning, setScanning] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [sups, setSups] = useState<Suppression[]>([]);
+  const [sonarStatus, setSonarStatus] = useState<SonarQubeStatus | null>(null);
 
   const refresh = useCallback(() => {
     api.getAwsStatus().then(setAws).catch(() => setAws({ connected: false, message: 'API unreachable' }));
     api.getSettings().then(setSettings).catch(() => {});
     api.getSuppressions().then(setSups).catch(() => {});
+    api.getSonarQubeStatus().then(setSonarStatus).catch(() => {});
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Only relevant to the all-in-one image's bundled SonarQube - a crash
+  // (most likely an out-of-memory kill under real scan load) has no other
+  // visible symptom besides the next scan's SAST stage silently failing, so
+  // this keeps checking while Settings is open rather than only once at load.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      api.getSonarQubeStatus().then(setSonarStatus).catch(() => {});
+    }, 20000);
+    return () => clearInterval(timer);
+  }, []);
 
   const save = async (patch: Partial<AppSettings>) => {
     if (!settings) return;
@@ -432,13 +577,39 @@ function SettingsPanel({ data, onReload }: { data: AiopsOutput; onReload: () => 
 
   return (
     <div className="settings">
+      {sonarStatus?.relevant && !sonarStatus.healthy && (
+        <div className="card sonar-crash-banner">
+          <div className="sonar-crash-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" />
+            </svg>
+          </div>
+          <div className="sonar-crash-body">
+            <strong>
+              {sonarStatus.crashReason === 'oom' ? 'SonarQube ran out of memory and stopped' : 'SonarQube stopped responding'}
+            </strong>
+            <p>
+              {sonarStatus.crashReason === 'oom'
+                ? "This container's SonarQube (bundled for SAST) used more memory than the host could give it and was killed. The rest of the pipeline (GitLeaks, Trivy, Checkov) is unaffected — only SAST results are missing until this is fixed."
+                : (sonarStatus.message ?? 'SonarQube is not reachable right now.')}
+            </p>
+            <p className="sonar-crash-fix">
+              <strong>Two real fixes:</strong> give this container more memory (raise Docker's memory
+              limit, or free up RAM on the host — SonarQube alone needs ~1.5–2GB even after trimming),
+              or turn it off with <span className="mono">-e SONARQUBE_AUTOSTART=false</span> and point
+              at an external SonarQube instead via <span className="mono">SONAR_HOST_URL</span>/
+              <span className="mono">SONAR_TOKEN</span>. Everything else keeps working either way.
+            </p>
+          </div>
+        </div>
+      )}
       {/* AWS connection */}
       <div className="card set-card">
         <div className="set-head">
           <h3>AWS connection</h3>
           {aws && (
-            <span className={`conn-pill ${aws.connected ? 'ok' : 'off'}`}>
-              {aws.connected ? 'Connected' : 'Not connected'}
+            <span className={`conn-pill ${!aws.connected ? 'off' : aws.hasFullAccess === false ? 'warn' : 'ok'}`}>
+              {!aws.connected ? 'Not connected' : aws.hasFullAccess === false ? 'Connected, limited access' : 'Connected'}
             </span>
           )}
         </div>
@@ -448,16 +619,42 @@ function SettingsPanel({ data, onReload }: { data: AiopsOutput; onReload: () => 
             <div className="d-item"><span className="d-label">Account</span><span className="d-value mono">{aws.account}</span></div>
             <div className="d-item"><span className="d-label">Identity</span><span className="d-value mono">{aws.arn}</span></div>
             <div className="d-item"><span className="d-label">Profile region</span><span className="d-value mono">{aws.region ?? '—'}</span></div>
+            {describeAwsAuthMethod(aws.arn) && (
+              <div className="d-item"><span className="d-label">Auth method</span><span className="d-value">{describeAwsAuthMethod(aws.arn)}</span></div>
+            )}
+            {aws.permissions && (
+              <div className="d-item">
+                <span className="d-label">Read access</span>
+                <span className="d-value">
+                  {(Object.entries(aws.permissions) as [string, boolean][]).map(([service, ok]) => (
+                    <span key={service} className={`perm-chip ${ok ? 'ok' : 'off'}`}>
+                      {ok ? '✓' : '✗'} {service.toUpperCase()}
+                    </span>
+                  ))}
+                </span>
+              </div>
+            )}
           </div>
         ) : (
           <div className="conn-help">
             <p>{aws?.message ?? 'Checking…'}</p>
-            <p className="empty-sub">
-              Credentials are resolved by Boto3: an IAM role when running on EC2, then environment
-              variables, then <code>~/.aws/credentials</code>. Run <code>aws configure</code> once
-              and reload — nothing needs to be entered here.
-            </p>
+            {aws?.messageKind !== 'deployment' && (
+              <p className="empty-sub">
+                Credentials are resolved by Boto3: an IAM role when running on EC2, then environment
+                variables, then <code>~/.aws/credentials</code>. Run <code>aws configure</code> once
+                and reload — nothing needs to be entered here.
+              </p>
+            )}
           </div>
+        )}
+
+        {aws?.connected && aws.hasFullAccess === false && (
+          <p className="set-note set-note-warn">
+            Connected, but missing read access for{' '}
+            {Object.entries(aws.permissions ?? {}).filter(([, ok]) => !ok).map(([s]) => s.toUpperCase()).join(', ')}
+            {' '}— the cloud scan will run but findings from those services will be incomplete. Attach the
+            AWS managed <code>SecurityAudit</code> policy to the credentials shown above and reload.
+          </p>
         )}
 
         <p className="set-note">
@@ -531,6 +728,12 @@ function SettingsPanel({ data, onReload }: { data: AiopsOutput; onReload: () => 
           <h3>Suppression rules</h3>
           <span className="stat-sub">{sups.length} active</span>
         </div>
+        <p className="set-card-desc">
+          A pattern-based filter that hides matching findings from every future scan automatically -
+          so a known false positive (e.g. test fixtures, a path that's out of scope) doesn't have to
+          be re-dismissed by hand every single run. Created from the "Dismiss" action on a finding in
+          the Findings page; each one below shows how many findings it's currently hiding.
+        </p>
         {sups.length === 0 ? (
           <p className="empty-sub">
             No rules yet. Dismiss a finding from the Findings page to create one.
@@ -572,6 +775,30 @@ function PipelineTargetCard({ settings, save, saving }: {
   const saveField = (key: keyof typeof p, value: string | boolean) =>
     save({ pipeline: { ...p, [key]: value } as never });
 
+  // Inspects what's actually mounted at /target and offers it as a one-click
+  // suggestion - never applied automatically, since "Run scan" acting on
+  // something the user didn't explicitly choose would be the wrong kind of
+  // "automatic" for a field that controls what gets scanned.
+  const [detected, setDetected] = useState<DetectedTarget | null>(null);
+  const [dismissed, setDismissed] = useState(false);
+  useEffect(() => { api.detectTarget().then(setDetected).catch(() => {}); }, []);
+
+  const suggestedTargetImage = detected?.hasDockerfile ? undefined : '';
+  const suggestionDiffers = detected && !dismissed && (
+    detected.sourceDir !== p.sourceDir ||
+    (detected.projectName && detected.projectName !== p.sonarProjectKey) ||
+    (suggestedTargetImage === '' && p.targetImage !== '')
+  );
+
+  const applyDetected = () => {
+    if (!detected) return;
+    const patch: Partial<typeof p> = { sourceDir: detected.sourceDir };
+    if (detected.projectName) patch.sonarProjectKey = detected.projectName;
+    if (!detected.hasDockerfile) patch.targetImage = '';
+    save({ pipeline: { ...p, ...patch } });
+    setDismissed(true);
+  };
+
   return (
     <div className="card set-card">
       <div className="set-head">
@@ -581,13 +808,34 @@ function PipelineTargetCard({ settings, save, saving }: {
       <p className="set-note" style={{ marginTop: 0, marginBottom: 16 }}>
         These map directly to the Jenkins job's own parameters — editing them
         here changes what the next "Run scan" click passes in, nothing more.
-        Container-internal paths only work if the target is mounted at that
-        path when the container starts (see the README's "Scanning your own
-        project" section).
+        <strong> Never applied automatically</strong> — they stay at whatever
+        was last saved (the installed default is the bundled Juice Shop demo)
+        until you either edit a field yourself or accept a detected
+        suggestion below. Each field also explains what real value to put
+        there.
       </p>
+      {suggestionDiffers && (
+        <div className="welcome-banner" style={{ marginBottom: 16 }}>
+          <div className="welcome-text">
+            <strong>Detected a different project mounted at /target</strong>
+            <span>
+              {detected!.projectName ? `Found "${detected!.projectName}" (from its package.json)` : 'Found a project'}
+              {detected!.hasDockerfile ? ' with its own Dockerfile.' : ' with no Dockerfile - Container image would be cleared.'}
+              {' '}Apply these as the real scan target?
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+            <button className="btn-primary" onClick={applyDetected}>Apply detected</button>
+            <button className="btn-ghost" onClick={() => setDismissed(true)}>Dismiss</button>
+          </div>
+        </div>
+      )}
 
-      <label className="set-row">
-        <span className="set-label">Source directory</span>
+      <label className="set-row hinted">
+        <span className="set-label-group">
+          <span className="set-label">Source directory</span>
+          <span className="set-hint">What GitLeaks/SonarQube scan. Use <span className="mono">/target</span> to scan whatever you mounted there — leave as <span className="mono">/target/juice-shop</span> only if you're still scanning the bundled demo.</span>
+        </span>
         <input
           className="set-input"
           value={draft.sourceDir}
@@ -597,8 +845,11 @@ function PipelineTargetCard({ settings, save, saving }: {
         />
       </label>
 
-      <label className="set-row">
-        <span className="set-label">IaC directory</span>
+      <label className="set-row hinted">
+        <span className="set-label-group">
+          <span className="set-label">IaC directory</span>
+          <span className="set-hint">What Checkov scans for Terraform/CloudFormation misconfigurations. Use <span className="mono">/target/infra</span> if your project has real IaC files there — otherwise leave the default; Checkov will just report nothing.</span>
+        </span>
         <input
           className="set-input"
           value={draft.iacDir}
@@ -608,19 +859,25 @@ function PipelineTargetCard({ settings, save, saving }: {
         />
       </label>
 
-      <label className="set-row">
-        <span className="set-label">Container image</span>
+      <label className="set-row hinted">
+        <span className="set-label-group">
+          <span className="set-label">Container image</span>
+          <span className="set-hint">A real image name Trivy can pull/scan, e.g. <span className="mono">myapp:latest</span>. Clear this field entirely if your project has no Dockerfile — the container scan is skipped rather than failing.</span>
+        </span>
         <input
           className="set-input"
           value={draft.targetImage}
           onChange={(e) => setDraft({ ...draft, targetImage: e.target.value })}
           onBlur={() => draft.targetImage !== p.targetImage && saveField('targetImage', draft.targetImage)}
-          placeholder="scratch"
+          placeholder="leave blank to skip Trivy"
         />
       </label>
 
-      <label className="set-row">
-        <span className="set-label">SonarQube project key</span>
+      <label className="set-row hinted">
+        <span className="set-label-group">
+          <span className="set-label">SonarQube project key</span>
+          <span className="set-hint">Any name you choose to identify this project in SonarQube, e.g. <span className="mono">accesshub</span>. Only matters if SAST is enabled below.</span>
+        </span>
         <input
           className="set-input"
           value={draft.sonarProjectKey}
@@ -668,30 +925,90 @@ const SOURCE_LABELS: Record<string, string> = {
   aws: 'AWS monitor (cloud)',
 };
 
-function DataSources({ sources }: { sources: SourceStatus[] }) {
+/** Maps a Jenkinsfile stage name to the scanner it corresponds to, so a
+ * live build's `currentStage` can highlight the matching source chip below.
+ * Stages with no direct scanner (Checkout, Docker image build, ...) map to
+ * null and are just skipped. */
+const STAGE_TO_SOURCE: Record<string, string> = {
+  'SAST - SonarQube': 'sonarqube',
+  'Secrets - GitLeaks': 'gitleaks',
+  'Container - Trivy': 'trivy',
+  'IaC - Checkov': 'checkov',
+  'AIOps engine & dashboard update': 'aws',
+};
+
+function DataSources({ sources, scan, elapsedLabel }: {
+  sources: SourceStatus[]; scan?: PipelineStatus | null; elapsedLabel?: string | null;
+}) {
   const missingOrError = sources.filter((s) => s.status !== 'ok');
+  // The scanners run as parallel branches (see the Jenkinsfile), so more
+  // than one is often genuinely active at once - every chip touched so far
+  // this run is highlighted, not just whichever produced the most recent
+  // console line. activeStages also picks up non-scanner stages (Checkout,
+  // the wrapping "Scans" stage itself) via the same console markers, so
+  // this is filtered down to real scanners for both the chip set and the
+  // "N scanners in parallel" count above.
+  const activeScannerStages = (scan?.activeStages ?? []).filter((s) => s in STAGE_TO_SOURCE);
+  const runningSources = new Set(activeScannerStages.map((s) => STAGE_TO_SOURCE[s]));
   return (
     <section className="block sources-block">
+      {scan && (
+        <div className="scan-progress-row">
+          <span className="spinner" />
+          <div className="scan-progress-text">
+            {/* currentStage only changes when a NEW stage/branch marker
+                appears in the console - with four scanners kicking off
+                within moments of each other, whichever one's marker happens
+                to print last "wins" and then never changes again for the
+                rest of the run (observed live: stuck on "IaC - Checkov" for
+                12+ minutes while SonarQube was still actively working).
+                currentActivity is the real, continuously-updating signal -
+                it belongs in this banner as the primary text, not buried
+                behind a frozen stage label. */}
+            <span className="scan-progress-stage">
+              {scan.state === 'queued' ? 'Queued, waiting for a Jenkins executor'
+                : activeScannerStages.length > 1 ? `Running ${activeScannerStages.length} scanners in parallel`
+                  : scan.currentStage ?? 'Starting…'}
+            </span>
+            {scan.currentActivity && <span className="scan-progress-activity">{scan.currentActivity}</span>}
+          </div>
+          {elapsedLabel && <span className="scan-elapsed">{elapsedLabel}</span>}
+          {scan.stalled && <span className="scan-progress-warn">quiet for a while - still watching</span>}
+        </div>
+      )}
+      {sources.length > 0 && (
       <div className="sources-row">
-        {sources.map((s) => (
-          <span
-            key={s.source}
-            className={`source-chip source-${s.status}`}
-            title={
-              s.status === 'ok' ? `${s.findings} findings`
-                : s.status === 'error' ? `Report was present but could not be read: ${s.detail ?? 'unknown error'}`
-                  : 'No report was produced for this run - the scanner may be disabled, not configured, or its stage failed'
-            }
-          >
-            <span className="source-dot" />
-            {SOURCE_LABELS[s.source] ?? s.source}
-            {s.status === 'ok' && <span className="source-count">{s.findings}</span>}
-            {s.status === 'missing' && <span className="source-reason">no report</span>}
-            {s.status === 'error' && <span className="source-reason">unreadable</span>}
-          </span>
-        ))}
+        {sources.map((s) => {
+          const running = runningSources.has(s.source);
+          return (
+            <span
+              key={s.source}
+              className={`source-chip source-${s.status}${running ? ' source-running' : ''}`}
+              title={
+                running ? 'Scanning now - the count shown is still from the last completed run'
+                  : s.status === 'ok' ? `${s.findings} findings`
+                    : s.status === 'error' ? `Report was present but could not be read: ${s.detail ?? 'unknown error'}`
+                      : 'No report was produced for this run - the scanner may be disabled, not configured, or its stage failed'
+              }
+            >
+              <span className="source-dot" />
+              {SOURCE_LABELS[s.source] ?? s.source}
+              {running && <span className="source-reason">scanning now…</span>}
+              {!running && s.status === 'ok' && <span className="source-count">{s.findings}</span>}
+              {!running && s.status === 'missing' && <span className="source-reason">no report</span>}
+              {!running && s.status === 'error' && <span className="source-reason">unreadable</span>}
+            </span>
+          );
+        })}
       </div>
-      {missingOrError.length > 0 && (
+      )}
+      {scan && sources.length > 0 && (
+        <p className="sources-note">
+          A scan is currently running - the numbers above are still from the last completed run
+          and will update once this one finishes.
+        </p>
+      )}
+      {!scan && missingOrError.length > 0 && (
         <p className="sources-note">
           This run's numbers only reflect the sources marked above as having
           findings - {missingOrError.map((s) => SOURCE_LABELS[s.source] ?? s.source).join(', ')} did
@@ -711,23 +1028,56 @@ function Funnel({ data }: { data: AiopsOutput }) {
   const suppressed = data.summary.suppressed ?? 0;
   const final = data.summary.after_dedup;
   const merged = raw - final - suppressed;
+  const afterMerge = raw - merged;
 
-  const rows = [
-    { label: 'Raw findings from all tools', n: raw, cls: 'raw' },
-    { label: 'Merged duplicates & grouped by remediation', n: merged, cls: 'merged', delta: true },
-    { label: 'Suppressed by analyst rules', n: suppressed, cls: 'suppressed', delta: true },
-    { label: 'Actionable findings', n: final, cls: 'final' },
-  ].filter((r) => r.n > 0 || r.cls === 'final');
+  // Every bar width below is a percentage of `raw` - dividing by zero before
+  // any scan has run would render every bar as NaN% instead of empty.
+  if (raw === 0) {
+    return <div className="donut-empty">No scan has run yet - this will fill in once one completes.</div>;
+  }
+
+  // Every stage's `n` is a running total (monotonically non-increasing), not
+  // a per-step delta - a funnel only reads as a funnel when width tracks
+  // "how much is left," not "how much was removed at this step." The delta
+  // is still shown, as the `removed` annotation, so nothing about *why* the
+  // count dropped is lost. Built explicitly per case (rather than generically
+  // appending an "actionable findings" stage) so a step that removed nothing
+  // never produces a stage whose number duplicates the one before it.
+  type Stage = { label: string; n: number; cls: string; removed?: number; removedWhy?: string };
+  const stages: Stage[] = [{ label: 'Raw findings from all tools', n: raw, cls: 'raw' }];
+  if (merged > 0) {
+    stages.push({
+      label: suppressed > 0 ? 'After merging duplicates & grouping by remediation' : 'Actionable findings',
+      n: afterMerge, cls: suppressed > 0 ? 'merged' : 'final', removed: merged, removedWhy: 'merged',
+    });
+  }
+  if (suppressed > 0) {
+    stages.push({ label: 'Actionable findings', n: final, cls: 'final', removed: suppressed, removedWhy: 'suppressed' });
+  }
+  if (merged === 0 && suppressed === 0) {
+    stages.push({ label: 'Actionable findings', n: final, cls: 'final' });
+  }
 
   return (
     <div className="funnel">
-      {rows.map((r) => (
-        <div className="funnel-row" key={r.label}>
-          <span className="funnel-label">{r.label}</span>
-          <span className="funnel-bar-wrap">
-            <span className={`funnel-bar ${r.cls}`} style={{ width: `${(r.n / raw) * 100}%` }} />
-          </span>
-          <span className={`funnel-n ${r.cls}`}>{r.delta ? `−${r.n}` : r.n}</span>
+      {stages.map((s, i) => (
+        <div className="funnel-stage" key={s.label}>
+          <span className={`funnel-badge funnel-badge-${s.cls}`}>{i + 1}</span>
+          <div className="funnel-stage-body">
+            <div className="funnel-stage-top">
+              <span className="funnel-stage-label">{s.label}</span>
+              <span className={`funnel-stage-n funnel-stage-n-${s.cls}`}>
+                {s.n} <span className="funnel-stage-pct">({((s.n / raw) * 100).toFixed(0)}%)</span>
+              </span>
+            </div>
+            <span className="funnel-bar-wrap">
+              <span className={`funnel-bar funnel-bar-${s.cls}`} style={{ width: `${(s.n / raw) * 100}%` }} />
+            </span>
+            {s.removed != null && (
+              <span className="funnel-removed">−{s.removed} {s.removedWhy} this step</span>
+            )}
+          </div>
+          {i < stages.length - 1 && <span className="funnel-connector" />}
         </div>
       ))}
       {(data.suppressions?.length ?? 0) > 0 && (
@@ -899,20 +1249,40 @@ function reasoningNote(f: Finding): { text: string; mismatch: boolean } {
   };
 }
 
+/* A small radial gauge instead of a plain numeric badge - severity readable
+ * by how much of the ring is filled, at a glance, before reading the
+ * number at all (the same idea behind DefectDojo's own "Risk" column). */
+function RiskGauge({ score, cls }: { score: number; cls: string }) {
+  const r = 15;
+  const c = 2 * Math.PI * r;
+  const filled = Math.max(0, Math.min(100, score)) / 100 * c;
+  return (
+    <svg className={`risk-gauge ${cls}`} width="38" height="38" viewBox="0 0 36 36">
+      <circle cx="18" cy="18" r={r} className="risk-gauge-track" />
+      <circle
+        cx="18" cy="18" r={r} className="risk-gauge-fill"
+        strokeDasharray={`${filled} ${c}`}
+        transform="rotate(-90 18 18)"
+      />
+      <text x="18" y="19" textAnchor="middle" dominantBaseline="middle" className="risk-gauge-text">{score}</text>
+    </svg>
+  );
+}
+
 /* ---------- Risk score with breakdown tooltip ---------- */
 function ScoreCell({ f }: { f: Finding }) {
   const cls = f.risk_score >= 80 ? 'bad' : f.risk_score >= 50 ? 'warn' : 'good';
   const parts = scoreParts(f);
   return (
     <span className="score-cell">
-      <span className={`risk-pill ${cls}`}>{f.risk_score}</span>
+      <RiskGauge score={f.risk_score} cls={cls} />
       <div className="score-pop">
         <div className="pop-head">Risk breakdown <span className="pop-formula">0.45·P<sub>RF</sub> + 0.25·S<sub>ret</sub> + 0.20·S<sub>asset</sub> + 0.10·S<sub>EPSS</sub></span></div>
         {parts.map((p) => (
           <div className="pop-row" key={p.key}>
             <span className="pop-label">{p.label}<span className="pop-w">×{p.w}</span></span>
             <span className="pop-bar"><span className="pop-fill" style={{ width: `${p.v * 100}%` }} /></span>
-            <span className="pop-val">{p.v.toFixed(2)}</span>
+            <span className="pop-val">{formatScoreValue(p.v)}</span>
           </div>
         ))}
         <div className="pop-foot">Confidence: <strong>{f.confidence}</strong></div>
@@ -921,34 +1291,141 @@ function ScoreCell({ f }: { f: Finding }) {
   );
 }
 
-/* ---------- Always-visible "why this score" panel in the expanded row ---------- */
-function RiskReasoning({ f }: { f: Finding }) {
-  const parts = scoreParts(f);
+/* ---------- Generic collapsible section for the finding detail panel ----------
+ * The detail panel accumulated a lot of real, useful content (technical
+ * description, score breakdown, metadata, related CVEs) that read fine one
+ * at a time but became overwhelming stacked flat with equal visual weight -
+ * a reader could not tell what to look at first. Each section is its own,
+ * independently-collapsed accordion item so only what someone actually
+ * wants to dig into takes up space; everything else stays a one-line,
+ * scannable header. */
+function DetailSection({ title, defaultOpen = false, children }: {
+  title: ReactNode; defaultOpen?: boolean; children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className={`detail-section ${open ? 'open' : ''}`}>
+      <button type="button" className="detail-section-head" onClick={() => setOpen((v) => !v)}>
+        <svg className={`detail-caret ${open ? 'open' : ''}`} viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
+        <span className="detail-section-title">{title}</span>
+      </button>
+      {open && <div className="detail-section-body">{children}</div>}
+    </div>
+  );
+}
+
+/* ---------- Always-visible: the short "why" sentence, not the full breakdown ---------- */
+function ScoreSummary({ f }: { f: Finding }) {
   const note = reasoningNote(f);
   const cls = f.risk_score >= 80 ? 'bad' : f.risk_score >= 50 ? 'warn' : 'good';
   return (
-    <div className="reasoning">
-      <div className="reasoning-head">
-        <span>Why this score</span>
-        <span className="reasoning-compare">
-          {f.reported_by.join('/')} reported <span className={`sev sev-${f.severity.toLowerCase()}`}>{f.severity}</span>
-          <span className="reasoning-vs">→</span>
-          ThreatWeave computed <span className={`risk-pill ${cls}`}>{f.risk_score}</span>
-        </span>
-      </div>
-
+    <div className="reasoning-summary">
+      <span className="reasoning-compare">
+        {f.reported_by.join('/')} reported <span className={`sev sev-${f.severity.toLowerCase()}`}>{f.severity}</span>
+        <span className="reasoning-vs">→</span>
+        ThreatWeave computed <span className={`risk-pill ${cls}`}>{f.risk_score}</span>
+      </span>
       <p className={`reasoning-note ${note.mismatch ? '' : 'reasoning-note-plain'}`}>{note.text}</p>
+    </div>
+  );
+}
 
+/* ---------- Inside the "Score breakdown" section: the four factor bars ---------- */
+function ScoreBreakdown({ f }: { f: Finding }) {
+  const parts = scoreParts(f);
+  // Collapsed by default: the four bars alone are already fairly compact -
+  // the per-factor evidence sentences (which words drove the ML score,
+  // which known CVEs it resembles, ...) are real and worth keeping, but
+  // showing all of them by default made this one section alone taller than
+  // the rest of the panel combined. One toggle for the whole set, not
+  // per-row - "just the numbers" and "explain everything" are the two
+  // states worth having, not a mix.
+  const [showEvidence, setShowEvidence] = useState(false);
+  const hasEvidence = parts.some((p) => evidenceText(p.key, f));
+  return (
+    <div className="reasoning">
       <div className="reasoning-bars">
-        {parts.map((p) => (
-          <div className="reasoning-row" key={p.key}>
-            <span className="reasoning-label">{p.label}<span className="pop-w">×{p.w}</span></span>
-            <span className="reasoning-bar"><span className="reasoning-fill" style={{ width: `${p.v * 100}%` }} /></span>
-            <span className="reasoning-val">{p.v.toFixed(2)}</span>
-          </div>
-        ))}
+        {parts.map((p) => {
+          const evidence = evidenceText(p.key, f);
+          return (
+            <div className="reasoning-row-wrap" key={p.key}>
+              <div className="reasoning-row">
+                <span className="reasoning-label">{p.label}<span className="pop-w">×{p.w}</span></span>
+                <span className="reasoning-bar"><span className="reasoning-fill" style={{ width: `${p.v * 100}%` }} /></span>
+                <span className="reasoning-val">{formatScoreValue(p.v)}</span>
+              </div>
+              {showEvidence && evidence && <p className="reasoning-evidence">{evidence}</p>}
+            </div>
+          );
+        })}
       </div>
+      {hasEvidence && (
+        <button type="button" className="reasoning-evidence-toggle" onClick={() => setShowEvidence((v) => !v)}>
+          {showEvidence ? '▾ Hide evidence' : '▸ Show evidence for each factor'}
+        </button>
+      )}
       <p className="reasoning-formula">0.45·P<sub>RF</sub> + 0.25·S<sub>ret</sub> + 0.20·S<sub>asset</sub> + 0.10·S<sub>EPSS</sub> — the severity badge is the source tool's own label and is never overwritten; the score is ThreatWeave's independent estimate.</p>
+    </div>
+  );
+}
+
+/* ---------- Scan-by-shape summary cards: kind, exposure, fix ----------
+ * One consistent icon per card *type* (not one icon per possible kind
+ * label, which would need maintaining a mapping for every current and
+ * future template) - the shield always means "what kind of issue",
+ * globe/lock always means "reachability", wrench always means "the fix".
+ * Recognising the shape is what makes this faster to scan than reading a
+ * sentence, matching how Snyk/Dependabot lead with a compact summary
+ * before the full detail. */
+function ShieldAlertIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <path d="M12 8v4M12 16h.01" />
+    </svg>
+  );
+}
+function GlobeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z" />
+    </svg>
+  );
+}
+function LockIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="11" width="16" height="9" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </svg>
+  );
+}
+function WrenchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2-2z" />
+    </svg>
+  );
+}
+
+function SummaryCards({ f }: { f: Finding }) {
+  return (
+    <div className="summary-cards">
+      {f.explanation_kind && (
+        <span className="summary-card kind">
+          <ShieldAlertIcon />
+          {f.explanation_kind}
+        </span>
+      )}
+      <span className={`summary-card ${f.internet_facing ? 'exposed' : ''}`}>
+        {f.internet_facing ? <GlobeIcon /> : <LockIcon />}
+        {f.internet_facing ? 'Internet-facing' : 'Internal only'}
+      </span>
+      {f.explanation_fix && (
+        <span className="summary-card fix" title={f.explanation_fix}>
+          <WrenchIcon />
+          {f.explanation_fix}
+        </span>
+      )}
     </div>
   );
 }
@@ -973,6 +1450,7 @@ function FindingRow({ f, isOpen, onToggle, clusters, onReload }: {
           {f.title}
           {(f.merged_count ?? 1) > 1 && <span className="tag grouped">{f.merged_count} CVEs · 1 fix</span>}
           {f.internet_facing && <span className="tag">internet-facing</span>}
+          {describeFindingAge(f.first_seen) && <span className="tag age">{describeFindingAge(f.first_seen)}</span>}
         </td>
         <td>{f.reported_by.join(', ')}</td>
         <td className="mono">{f.affected_resource}</td>
@@ -982,30 +1460,18 @@ function FindingRow({ f, isOpen, onToggle, clusters, onReload }: {
         <tr className="detail-row">
           <td colSpan={7}>
             <div className="detail">
+              {/* Always visible: scan-by-shape cards for what kind of issue
+                  this is, whether it's reachable, and what to do - the same
+                  three facts the old paragraph carried, but as something a
+                  reader can take in at a glance instead of parsing a
+                  sentence for. The full sentence stays too, just visually
+                  secondary now, for anyone who wants the complete reasoning
+                  rather than the summary. Everything past this point is
+                  real, but supporting - opened on demand. */}
+              <SummaryCards f={f} />
               <p className="d-expl">{f.explanation}</p>
-              <RiskReasoning f={f} />
-              <div className="d-grid">
-                {detail('Location / Resource', <span className="mono">{f.affected_resource}</span>)}
-                {detail('Reported by', f.reported_by.join(', '))}
-                {detail('Type', f.type)}
-                {detail('Environment', f.environment)}
-                {detail('Internet facing', f.internet_facing ? 'Yes — publicly reachable' : 'No — internal only')}
-                {f.cve_id && detail('CVE', <a className="cve-link" href={`https://nvd.nist.gov/vuln/detail/${f.cve_id}`} target="_blank" rel="noreferrer">{f.cve_id} ↗</a>)}
-                {f.cvss_score != null && detail('CVSS base score', f.cvss_score.toFixed(1))}
-                {detail('Confidence', f.confidence)}
-              </div>
-              {(f.related_cves?.length ?? 0) > 1 && (
-                <div className="d-cves">
-                  <span className="d-label">All {f.related_cves!.length} CVEs cleared by this one upgrade</span>
-                  <div className="cve-chips">
-                    {f.related_cves!.map((c) => (
-                      c.startsWith('CVE-')
-                        ? <a key={c} className="cve-chip" href={`https://nvd.nist.gov/vuln/detail/${c}`} target="_blank" rel="noreferrer">{c}</a>
-                        : <span key={c} className="cve-chip">{c}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
+              <ScoreSummary f={f} />
+
               {cluster && (
                 <div className="d-cluster">
                   <span className="d-cluster-tag">Part of attack path</span>
@@ -1013,6 +1479,46 @@ function FindingRow({ f, isOpen, onToggle, clusters, onReload }: {
                   <span className="risk-pill bad">{cluster.risk_score}</span>
                 </div>
               )}
+
+              <div className="detail-sections">
+                {isRealDescription(f.description) && f.description !== f.explanation && (
+                  <DetailSection title="What this actually is">
+                    <p className="d-technical-text">{f.description}</p>
+                  </DetailSection>
+                )}
+
+                <DetailSection title="Score breakdown">
+                  <ScoreBreakdown f={f} />
+                </DetailSection>
+
+                <DetailSection title="Details">
+                  <div className="d-grid">
+                    {detail('Location / Resource', <span className="mono">{f.affected_resource}</span>)}
+                    {detail('Reported by', f.reported_by.join(', '))}
+                    {detail('Type', f.type)}
+                    {detail('Environment', f.environment)}
+                    {detail('Internet facing', f.internet_facing ? 'Yes — publicly reachable' : 'No — internal only')}
+                    {f.cve_id && detail('CVE', <a className="cve-link" href={`https://nvd.nist.gov/vuln/detail/${f.cve_id}`} target="_blank" rel="noreferrer">{f.cve_id} ↗</a>)}
+                    {f.cvss_score != null && detail('CVSS base score', f.cvss_score.toFixed(1))}
+                    {detail('Confidence', <span title={confidenceExplanation(f)}>{f.confidence}</span>)}
+                    {f.first_seen && detail('First detected', new Date(f.first_seen).toLocaleString())}
+                    {f.last_seen && detail('Last seen', new Date(f.last_seen).toLocaleString())}
+                  </div>
+                  <p className="d-confidence-note">{confidenceExplanation(f)}</p>
+                </DetailSection>
+
+                {(f.related_cves?.length ?? 0) > 1 && (
+                  <DetailSection title={`All ${f.related_cves!.length} CVEs cleared by this one upgrade`}>
+                    <div className="cve-chips">
+                      {f.related_cves!.map((c) => (
+                        c.startsWith('CVE-')
+                          ? <a key={c} className="cve-chip" href={`https://nvd.nist.gov/vuln/detail/${c}`} target="_blank" rel="noreferrer">{c}</a>
+                          : <span key={c} className="cve-chip">{c}</span>
+                      ))}
+                    </div>
+                  </DetailSection>
+                )}
+              </div>
 
               <DismissPanel f={f} onDone={onReload} />
             </div>
@@ -1104,27 +1610,175 @@ function DismissPanel({ f, onDone }: { f: Finding; onDone: () => void }) {
   );
 }
 
+/** Short date label for a chart x-axis, e.g. "Aug 29, 14:20" - distinct from
+ * a full ISO timestamp because axis space is tight and several runs on the
+ * same day need to stay distinguishable. Falls back to the raw run_id if
+ * generated_at is missing or unparseable, so an axis label is never blank. */
+function shortRunLabel(p: HistoryPoint): string {
+  const d = new Date(p.generated_at);
+  if (Number.isNaN(d.getTime())) return p.run_id;
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
+    ', ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Axis tick that leads with time, not date - pipeline runs are frequent
+ * enough (several per day, sometimes minutes apart) that a run of "Aug 29 /
+ * Aug 29 / Aug 29" date-only ticks looks organised but says nothing: every
+ * shown run that day is indistinguishable from the others. The date is
+ * still shown, but only on the first tick and on the first tick after the
+ * date actually changes - exactly where it carries information. */
+function axisTickLabel(p: HistoryPoint, showDate: boolean): string {
+  const d = new Date(p.generated_at);
+  if (Number.isNaN(d.getTime())) return p.run_id;
+  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+  if (!showDate) return time;
+  return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${time}`;
+}
+
 /* ---------- Health trend line chart (pure SVG) ---------- */
 function TrendChart({ points }: { points: HistoryPoint[] }) {
-  const W = 640, H = 180, pad = 28;
-  const xs = points.map((_, i) => pad + (i * (W - 2 * pad)) / (points.length - 1));
-  const ys = points.map((p) => H - pad - (p.health_score / 100) * (H - 2 * pad));
+  const [hover, setHover] = useState<number | null>(null);
+  const W = 640, H = 230, padL = 34, padR = 16, padT = 14, padB = 60;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const xs = points.map((_, i) => padL + (points.length === 1 ? plotW / 2 : (i * plotW) / (points.length - 1)));
+  const y = (score: number) => padT + plotH - (score / 100) * plotH;
+  const ys = points.map((p) => y(p.health_score));
   const line = xs.map((x, i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${ys[i].toFixed(1)}`).join(' ');
-  const area = `${line} L${xs[xs.length - 1].toFixed(1)},${H - pad} L${xs[0].toFixed(1)},${H - pad} Z`;
+  const area = `${line} L${xs[xs.length - 1].toFixed(1)},${padT + plotH} L${xs[0].toFixed(1)},${padT + plotH} Z`;
+  // Every label would overlap on a long run history - thin them out so at
+  // most ~5 are drawn (date-only ticks, rotated, still need real width),
+  // always keeping the first and last run visible.
+  const labelStep = Math.max(1, Math.ceil(points.length / 5));
+  const active = hover ?? points.length - 1;
+  const activePoint = points[active];
+
   return (
-    <svg className="trend" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet">
-      {[0, 25, 50, 75, 100].map((g) => {
-        const y = H - pad - (g / 100) * (H - 2 * pad);
-        return (<g key={g}><line x1={pad} y1={y} x2={W - pad} y2={y} className="grid-line" /><text x={4} y={y + 3} className="grid-text">{g}</text></g>);
-      })}
-      <path d={area} className="trend-area" />
-      <path d={line} className="trend-line" />
-      {points.map((p, i) => (
-        <g key={p.run_id}>
-          <circle cx={xs[i]} cy={ys[i]} r={4} className={`trend-dot ${healthLabel(p.health_score).cls}`} />
-          <title>{`${p.run_id}: ${p.health_score}`}</title>
-        </g>
-      ))}
-    </svg>
+    <div className="trend-wrap">
+      <div className="trend-legend">
+        <span>Health score (0–100, higher is healthier)</span>
+        <span className="trend-legend-swatches">
+          <span className="trend-swatch good" />Healthy 80+
+          <span className="trend-swatch warn" />At risk 50–79
+          <span className="trend-swatch bad" />Critical &lt;50
+        </span>
+      </div>
+      <svg className="trend" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet">
+        {/* Risk-zone background bands, so the line's position reads as
+            good/at-risk/critical at a glance instead of needing the y-axis
+            numbers decoded first. */}
+        <rect x={padL} y={y(100)} width={plotW} height={y(80) - y(100)} className="trend-band good" />
+        <rect x={padL} y={y(80)} width={plotW} height={y(50) - y(80)} className="trend-band warn" />
+        <rect x={padL} y={y(50)} width={plotW} height={y(0) - y(50)} className="trend-band bad" />
+
+        {[0, 25, 50, 75, 100].map((g) => (
+          <g key={g}>
+            <line x1={padL} y1={y(g)} x2={W - padR} y2={y(g)} className="grid-line" />
+            <text x={padL - 6} y={y(g) + 3} textAnchor="end" className="grid-text">{g}</text>
+          </g>
+        ))}
+
+        {(() => {
+          let lastDate: string | null = null;
+          return points.map((p, i) => {
+            if (!(i === 0 || i === points.length - 1 || i % labelStep === 0)) return null;
+            const d = new Date(p.generated_at);
+            const dateKey = Number.isNaN(d.getTime()) ? null : d.toDateString();
+            const showDate = lastDate === null || dateKey !== lastDate;
+            lastDate = dateKey;
+            return (
+              <text
+                key={`lbl-${p.run_id}`} x={xs[i]} y={H - padB + 18} textAnchor="end" className="trend-x-text"
+                transform={`rotate(-35 ${xs[i]} ${H - padB + 18})`}
+              >
+                {axisTickLabel(p, showDate)}
+              </text>
+            );
+          });
+        })()}
+
+        <path d={area} className="trend-area" />
+        <path d={line} className="trend-line" />
+
+        {active != null && <line x1={xs[active]} y1={padT} x2={xs[active]} y2={padT + plotH} className="trend-guide" />}
+
+        {points.map((p, i) => (
+          <circle
+            key={p.run_id}
+            cx={xs[i]} cy={ys[i]} r={i === active ? 6 : 4}
+            className={`trend-dot ${healthLabel(p.health_score).cls}`}
+            onMouseEnter={() => setHover(i)}
+            onMouseLeave={() => setHover(null)}
+          />
+        ))}
+      </svg>
+      {activePoint && (
+        <div className="trend-tooltip">
+          <span className="trend-tooltip-run">{activePoint.run_id}</span>
+          <span className="trend-tooltip-date">{shortRunLabel(activePoint)}</span>
+          <span className={`trend-tooltip-score ${healthLabel(activePoint.health_score).cls}`}>
+            {activePoint.health_score} · {healthLabel(activePoint.health_score).text}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Findings-by-severity donut - mirrors the always-visible "what does the
+ * current mix look like" summary common to other AppSec dashboards, as a
+ * companion to the trend chart (trend shows direction, this shows current
+ * composition - neither alone answers both questions). */
+function SeverityDonut({ summary }: { summary: AiopsOutput['summary'] }) {
+  const segments: { label: string; n: number; cls: string }[] = [
+    { label: 'Critical', n: summary.critical, cls: 'crit' },
+    { label: 'High', n: summary.high, cls: 'high' },
+    { label: 'Medium', n: summary.medium, cls: 'med' },
+    { label: 'Low', n: summary.low, cls: 'low' },
+  ];
+  const total = segments.reduce((sum, s) => sum + s.n, 0);
+  const r = 60, c = 2 * Math.PI * r;
+  let offset = 0;
+
+  if (total === 0) {
+    return <div className="donut-empty">No open findings after deduplication.</div>;
+  }
+
+  const severe = summary.critical + summary.high;
+  const severePct = Math.round((severe / total) * 100);
+
+  return (
+    <div className="donut-card-body">
+      <div className="donut-wrap">
+        <svg width="150" height="150" viewBox="0 0 150 150">
+          <g transform="rotate(-90 75 75)">
+            <circle cx="75" cy="75" r={r} className="donut-track" />
+            {segments.filter((s) => s.n > 0).map((s) => {
+              const len = (s.n / total) * c;
+              const dash = `${len} ${c - len}`;
+              const el = <circle key={s.label} cx="75" cy="75" r={r} className={`donut-seg donut-${s.cls}`}
+                strokeDasharray={dash} strokeDashoffset={-offset} />;
+              offset += len;
+              return el;
+            })}
+          </g>
+          <text x="75" y="70" textAnchor="middle" className="donut-total">{total}</text>
+          <text x="75" y="88" textAnchor="middle" className="donut-total-label">findings</text>
+        </svg>
+        <ul className="donut-legend">
+          {segments.map((s) => (
+            <li key={s.label}>
+              <span className={`donut-swatch donut-${s.cls}`} />
+              <span className="donut-legend-label">{s.label}</span>
+              <span className="donut-legend-n">{s.n}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+      {severe > 0 && (
+        <p className="donut-insight">
+          <strong>{severe} of {total} ({severePct}%)</strong> are Critical or High severity — prioritise these first.
+        </p>
+      )}
+    </div>
   );
 }

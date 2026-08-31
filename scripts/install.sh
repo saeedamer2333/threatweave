@@ -53,12 +53,15 @@ check_prereqs() {
         || die "Docker Compose v2 is required (comes with modern Docker)."
     ok "compose $(docker compose version --short)"
 
-    # Memory: SonarQube alone wants ~3GB, so warn rather than fail.
+    # Memory: SonarQube alone wants ~3GB, and SAST is now set up automatically
+    # by default (see setup_sast), so warn clearly rather than let it fail
+    # silently partway through on a too-small host.
     if need_cmd free; then
         local mb; mb=$(free -m | awk '/^Mem:/{print $2}')
         if [ "$mb" -lt 6000 ]; then
-            warn "Only ${mb}MB RAM detected. The core stack needs ~4GB;"
-            warn "the optional SonarQube profile needs ~3GB more."
+            warn "Only ${mb}MB RAM detected. The core stack needs ~4GB, and SonarQube"
+            warn "(set up automatically below) needs ~3GB more. Set THREATWEAVE_SAST=0"
+            warn "to skip it if this host can't spare that."
         else
             ok "${mb}MB RAM available"
         fi
@@ -159,7 +162,33 @@ start_stack() {
     [ "$waited" -lt 300 ] && ok "Jenkins is up"
 }
 
+# --------------------------------------------------------------------- sast --
+# Fully headless: starts SonarQube, generates its own token, wires it into
+# .env - see setup-sonarqube.sh. Opt-out only, not opt-in, per the project's
+# "no manual steps after install" goal; THREATWEAVE_SAST=0 skips it (e.g. on
+# a host too small to spare the extra ~3GB SonarQube wants).
+setup_sast() {
+    if [ "${THREATWEAVE_SAST:-1}" = "0" ]; then
+        info "Skipping SAST setup (THREATWEAVE_SAST=0)"
+        return
+    fi
+    info "Setting up SonarQube for SAST (fully automatic - no browser needed)"
+    if "$INSTALL_DIR/implementation/scripts/setup-sonarqube.sh"; then
+        SAST_ENABLED=1
+    else
+        warn "SonarQube setup did not complete - SAST stays disabled for now."
+        warn "Re-run scripts/setup-sonarqube.sh once SonarQube has more resources available."
+    fi
+}
+
 summary() {
+    local sast_line
+    if [ "${SAST_ENABLED:-0}" = "1" ]; then
+        sast_line="${GREEN}SonarQube (SAST)  already configured - included in every scan${RESET}"
+    else
+        sast_line="${DIM}SonarQube (SAST)  not enabled - run scripts/setup-sonarqube.sh any time${RESET}"
+    fi
+
     cat <<EOF
 
 ${GREEN}${BOLD}ThreatWeave is running.${RESET}
@@ -167,6 +196,7 @@ ${GREEN}${BOLD}ThreatWeave is running.${RESET}
   Dashboard   ${BOLD}http://localhost:3000${RESET}
   Jenkins     ${BOLD}http://localhost:8080${RESET}   ${DIM}(admin / admin)${RESET}
   API         ${BOLD}http://localhost:4000/api${RESET}
+  ${sast_line}
 
 ${BOLD}Next steps${RESET}
   1. Open the dashboard and check Settings for your AWS connection status.
@@ -176,7 +206,6 @@ ${BOLD}Next steps${RESET}
      ${DIM}threatweave-pipeline${RESET} for the full DevSecOps pipeline.
 
 ${BOLD}Optional profiles${RESET}
-  docker compose --profile sast up -d     ${DIM}SonarQube for SAST (needs ~3GB RAM)${RESET}
   docker compose --profile demo up -d     ${DIM}OWASP Juice Shop as a scan target${RESET}
 
 ${BOLD}Manage${RESET}
@@ -191,6 +220,7 @@ main() {
     fetch_project
     configure
     start_stack
+    setup_sast
     summary
 }
 

@@ -930,15 +930,17 @@ const SOURCE_LABELS: Record<string, string> = {
  * Stages with no direct scanner (Checkout, Docker image build, ...) map to
  * null and are just skipped. */
 const STAGE_TO_SOURCE: Record<string, string> = {
-  'SAST - SonarQube': 'sonarqube',
+  // SonarQube's actual multi-minute analysis no longer happens inside a
+  // Jenkins stage at all - it runs as a detached container that outlives
+  // the build that launched it, and a later run's brief "(async)" stage
+  // only checks on it / kicks off the next one (seconds, not minutes). This
+  // chip is therefore rarely seen "running" any more, which is accurate:
+  // most of the time nothing is actively waiting on it.
+  'SAST - SonarQube (async)': 'sonarqube',
   'Secrets - GitLeaks': 'gitleaks',
   'Container - Trivy': 'trivy',
   'IaC - Checkov': 'checkov',
-  // Tier 3 split the single AIOps stage into two (fast-scanners pass, then a
-  // final pass once SonarQube is done) - both still map to the AWS chip
-  // since the monitor call itself only happens in the first one.
-  'AIOps engine & dashboard update (fast scanners)': 'aws',
-  'AIOps engine & dashboard update (final)': 'aws',
+  'AIOps engine & dashboard update': 'aws',
 };
 
 function DataSources({ sources, scan, elapsedLabel }: {

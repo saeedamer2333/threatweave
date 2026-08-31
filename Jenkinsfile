@@ -5,6 +5,12 @@
  * cloud checks, then hands every report to the AIOps engine which
  * deduplicates, scores, correlates and explains them.
  *
+ * SonarQube's SAST scan runs asynchronously, detached from the rest of the
+ * run rather than blocked on: it is kicked off early each run and its
+ * results are picked up by whichever later run finds it finished (see
+ * checkPendingSonarScan/kickOffSonarScan) - GitLeaks/Trivy/Checkov and the
+ * AIOps engine itself never wait on it.
+ *
  * Scanners run as containers via the mounted Docker socket, so the only
  * tooling this image needs is the Docker CLI and Python.
  *
@@ -101,15 +107,7 @@ def runScanner(String name, String expectedReport, Closure body) {
 
 /**
  * Runs the AIOps engine over whatever reports exist in INPUT_DIR right now
- * and updates the dashboard's output. Called twice per pipeline run (see
- * the "AIOps engine & dashboard update" stages) - once right after the fast
- * scanners (GitLeaks/Trivy/Checkov/AWS) finish, so the dashboard reflects
- * real results in well under a minute instead of waiting on SonarQube, and
- * again after SonarQube's own stage completes, to fold SAST in once it's
- * actually ready. Both calls use the same --run-id, so the second run
- * replaces rather than duplicates the first in history (history_tracker.py
- * already dedupes on run_id) - the dashboard just sees the same run's
- * numbers get more complete, not two separate builds.
+ * and updates the dashboard's output.
  */
 def runAiopsEngine(String phaseLabel) {
     echo "Inputs collected for this run (${phaseLabel}):"
@@ -146,14 +144,191 @@ def runAiopsEngine(String phaseLabel) {
         "Health ${out.health_score} | ${s.after_dedup} findings | ${s.clusters} path(s)"
 
     // The engine writes to the bind-mounted project directory, which is
-    // outside the job workspace, so copy it in first. Re-archiving on the
-    // second call is deliberate: it overwrites the fast-scanners-only
-    // artifact with the complete one, so anyone downloading it later gets
-    // the final picture, not the partial one.
+    // outside the job workspace, so copy it in before archiving.
     sh "cp ${FINDINGS_DIR}/aiops-output.json ./aiops-output.json"
     archiveArtifacts artifacts: 'aiops-output.json', allowEmptyArchive: true
 
     return out
+}
+
+/** Path of the marker file recording an in-flight async SonarQube scan, if
+ * any - see checkPendingSonarScan/kickOffSonarScan below. Lives in
+ * FINDINGS_DIR, not INPUT_DIR, specifically because Checkout wipes
+ * INPUT_DIR's contents every run but FINDINGS_DIR persists, which is what
+ * lets this survive across the build boundary a detached scan runs over. */
+def sonarPendingMarker() { "${FINDINGS_DIR}/.sonar-pending.json" }
+
+/** Path of the last successfully-fetched SonarQube report, kept outside
+ * INPUT_DIR (which Checkout wipes every run) for exactly one reason: a
+ * fresh async scan only actually finishes on some runs, not every one, so
+ * without this the dashboard's SAST/vulnerability numbers would blink out
+ * to zero on every run in between rather than just holding the last real
+ * numbers a little longer than the fast scanners' - see checkPendingSonarScan. */
+def sonarLastGood() { "${FINDINGS_DIR}/sonarqube-last-good.json" }
+
+/**
+ * SonarQube's own analysis takes minutes no matter the CPU budget. Blocking
+ * a run on it (as this pipeline used to) makes the whole run wait; running
+ * it after the fast scanners in the same run instead just adds its full
+ * duration on top since nothing overlaps it any more (measured live on this
+ * exact target: 10.3min parallel -> 15.2min sequential-after). This pair of
+ * functions instead launches it *detached* and never blocks a build on it -
+ * by the time the container this reads has actually finished, it is
+ * normally the NEXT run picking up the results, not the one that launched
+ * it. SAST results are therefore always real findings from an actual
+ * completed scan of a real commit, just one run older than the fast
+ * scanners' results in the same dashboard update (never a stale on-disk
+ * cache silently reused - see the earlier decision against a homegrown
+ * "Developer Edition" incremental cache) - a small, honestly-labelled lag
+ * in exchange for SonarQube's ~5 minutes overlapping the ~9 minute fast
+ * scanner phase of whichever run happens to be executing while it works,
+ * recovering the old parallel design's overlap one run later instead of
+ * losing it outright.
+ */
+def checkPendingSonarScan() {
+    // Seed this run with the last successfully-fetched report before doing
+    // anything else, so a run where nothing new happens to finish this
+    // cycle still has real (if slightly older) SAST data to correlate
+    // against, rather than the engine seeing no SonarQube report at all.
+    def hasLastGood = sh(script: "[ -f ${sonarLastGood()} ] && echo yes || echo no", returnStdout: true).trim()
+    if (hasLastGood == 'yes') {
+        sh "cp ${sonarLastGood()} ${INPUT_DIR}/sonarqube-report.json"
+        scanStatus['SAST - SonarQube'] = 'ok (carried over from an earlier scan)'
+    }
+
+    def markerExists = sh(script: "[ -f ${sonarPendingMarker()} ] && echo yes || echo no", returnStdout: true).trim()
+    if (markerExists != 'yes') {
+        echo 'No async SonarQube scan currently in flight.'
+        return
+    }
+
+    def pending = readJSON file: sonarPendingMarker()
+    def container = pending.container
+
+    def state = sh(
+        script: "docker inspect -f '{{.State.Status}}' ${container} 2>/dev/null || echo missing",
+        returnStdout: true,
+    ).trim()
+
+    if (state == 'missing') {
+        echo "WARNING: pending SonarQube container ${container} (from ${pending.run_id}) no longer exists - clearing stale marker."
+        sh "rm -f ${sonarPendingMarker()}"
+        return
+    }
+
+    if (state == 'running') {
+        def ageMin = (System.currentTimeMillis() - (pending.started_at_epoch_ms as Long)) / 60000
+        // 20 min is generous headroom over the ~5 min this scan normally
+        // takes - this only fires if something is genuinely stuck, so a
+        // slow-but-healthy run is never mistaken for one.
+        if (ageMin > 20) {
+            echo "WARNING: SonarQube scan from ${pending.run_id} has been running for ${ageMin.trunc()} min - assuming it is stuck and killing it."
+            sh "docker rm -f ${container} 2>/dev/null || true"
+            sh "rm -f ${sonarPendingMarker()}"
+        } else {
+            echo "SonarQube scan from ${pending.run_id} is still running (${ageMin.trunc()} min so far) - will check again next run."
+            // Not overwritten with 'pending' when a last-good report was
+            // already seeded above - the dashboard still has real numbers
+            // to show, they are just not from this run's commit yet.
+            scanStatus['SAST - SonarQube'] = scanStatus['SAST - SonarQube'] ?:
+                "pending (started by ${pending.run_id}, still running, no earlier scan to fall back on)"
+        }
+        return
+    }
+
+    def exitCode = sh(script: "docker inspect -f '{{.State.ExitCode}}' ${container}", returnStdout: true).trim()
+    if (exitCode != '0') {
+        echo "WARNING: SonarQube scan from ${pending.run_id} exited with code ${exitCode} - see 'docker logs ${container}' on the host."
+        // Same reasoning as the 'running' branch above: keep whatever was
+        // already seeded from the last good scan rather than blanking it
+        // out just because the newest attempt failed.
+        scanStatus['SAST - SonarQube'] = scanStatus['SAST - SonarQube'] ?: "failed: scanner exited ${exitCode}"
+        sh "docker rm -f ${container} 2>/dev/null || true"
+        sh "rm -f ${sonarPendingMarker()}"
+        return
+    }
+
+    echo "SonarQube scan from ${pending.run_id} finished - fetching its results."
+    runScanner('SAST - SonarQube', "${INPUT_DIR}/sonarqube-report.json") {
+        // The scanner container only SUBMITS the analysis; SonarQube
+        // processes it asynchronously on its own background queue, so even
+        // a finished (exited) scanner container does not guarantee results
+        // are queryable yet - same wait this pipeline always needed, just
+        // relocated to catch-up time instead of directly after the scan.
+        //
+        // set +x: Jenkins traces sh steps with -x, which would print the
+        // expanded token into the build log. The credential is read from
+        // the environment by the shell, never interpolated by Groovy.
+        sh """
+            set +x
+            settled=0
+            for i in \$(seq 1 60); do
+                st=\$(curl -sS -m 15 -u "\$SONAR_TOKEN:" \
+                    "\$SONAR_HOST_URL/api/ce/activity_status?component=${pending.project_key}" \
+                    2>/dev/null || echo '')
+                case "\$st" in
+                    *'"pending":0'*'"inProgress":0'*)
+                        echo "  analysis processed after \$((i*5))s"
+                        settled=1; break ;;
+                    *'Insufficient privileges'*)
+                        echo '  WARNING: SONAR_TOKEN cannot read the analysis queue - results may be read before ready.'
+                        settled=1; break ;;
+                esac
+                sleep 5
+            done
+            [ "\$settled" = 1 ] || echo '  WARNING: still processing after 5 min - results may be incomplete.'
+
+            curl -sS -u "\$SONAR_TOKEN:" \
+              "\$SONAR_HOST_URL/api/issues/search?componentKeys=${pending.project_key}&types=VULNERABILITY&ps=500" \
+              -o ${INPUT_DIR}/sonarqube-report.json
+        """
+    }
+
+    // Only promoted to "last good" on a genuine ok - a report that turned
+    // out too small/missing (runScanner's own check) must not overwrite a
+    // real earlier one.
+    if ((scanStatus['SAST - SonarQube'] ?: '').startsWith('ok')) {
+        sh "cp ${INPUT_DIR}/sonarqube-report.json ${sonarLastGood()}"
+    }
+    sh "docker rm -f ${container} 2>/dev/null || true"
+    sh "rm -f ${sonarPendingMarker()}"
+}
+
+/** Launches a fresh async SonarQube scan, if SonarQube is configured and no
+ * scan is already in flight - see checkPendingSonarScan for why this is
+ * detached rather than awaited. */
+def kickOffSonarScan() {
+    if (!env.SONAR_HOST_URL?.trim()) {
+        echo 'SONAR_HOST_URL not set - not launching an async SAST scan.'
+        return
+    }
+    def markerExists = sh(script: "[ -f ${sonarPendingMarker()} ] && echo yes || echo no", returnStdout: true).trim()
+    if (markerExists == 'yes') {
+        echo 'A SonarQube scan is already in flight - not launching another on top of it.'
+        return
+    }
+
+    def container = 'sonar-scan-pending'
+    sh """
+        docker rm -f ${container} 2>/dev/null || true
+        docker run -d --name ${container} --network ${SONAR_NETWORK} --cpus="4" \
+          -v "${toHostPath(params.SOURCE_DIR)}:/usr/src" \
+          -e SONAR_HOST_URL \
+          -e SONAR_TOKEN \
+          sonarsource/sonar-scanner-cli:latest \
+          -Dsonar.projectKey=${params.SONAR_PROJECT_KEY} \
+          -Dsonar.sources=/usr/src \
+          -Dsonar.scm.disabled=true \
+          -Dsonar.working.directory=/tmp/.scannerwork \
+          -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/build/**,**/coverage/**,**/*.min.js,**/screenshots/**,**/assets/private/**,**/*.{jpg,jpeg,png,gif,ico,svg,webp,avif,bmp,mp4,mov,webm,woff,woff2,ttf,eot,otf,pdf,zip}
+    """
+    writeJSON file: sonarPendingMarker(), json: [
+        container       : container,
+        run_id          : "build-${BUILD_NUMBER}",
+        project_key     : params.SONAR_PROJECT_KEY,
+        started_at_epoch_ms: System.currentTimeMillis(),
+    ]
+    echo "Launched async SonarQube scan (container ${container}, cpus=4) - a later run will pick up its results."
 }
 
 pipeline {
@@ -256,6 +431,24 @@ pipeline {
         }
 
         /* 2 ----------------------------------------------------------- */
+        // Checks whether an async SonarQube scan launched by an earlier run
+        // has finished (and if so, fetches its results into this run), then
+        // launches a fresh one right away if none is currently in flight -
+        // as early as possible in the run, so it has the whole ~9 minute
+        // fast-scanner phase below to work in before this run even ends,
+        // rather than only getting started once that phase is already over.
+        // See checkPendingSonarScan/kickOffSonarScan for the full reasoning.
+        stage('SAST - SonarQube (async)') {
+            when { expression { !skipRun } }
+            steps {
+                script {
+                    checkPendingSonarScan()
+                    kickOffSonarScan()
+                }
+            }
+        }
+
+        /* 3 ----------------------------------------------------------- */
         stage('Dependencies & unit tests') {
             when { expression { !skipRun } }
             steps {
@@ -269,15 +462,17 @@ pipeline {
             }
         }
 
-        /* 3 ----------------------------------------------------------- */
-        // These three scanners are independent of each other and all finish
-        // in seconds to a couple of minutes regardless of CPU share - run
-        // them concurrently so wall-clock time is roughly the slowest of the
-        // three, not their sum. SonarQube used to run in this same parallel
-        // block, capped to 4 CPUs specifically to leave room for these three
-        // - it now runs afterward, alone, in its own stage (see below),
-        // which is also why it can be given far more CPU than it could
-        // safely share here.
+        /* 4 ----------------------------------------------------------- */
+        // GitLeaks/Trivy/Checkov are independent of each other and all
+        // finish in seconds to a couple of minutes regardless of CPU share -
+        // run them concurrently so wall-clock time is roughly the slowest of
+        // the three, not their sum. SonarQube overlaps this stage too now
+        // (see stage 2), just as an async scan possibly still running from
+        // an earlier launch, which is why these three are still capped low
+        // (1 + 0.5 + 0.5 = 2 cpus) rather than given more room: SonarQube's
+        // own cap (4 cpus, see kickOffSonarScan) already assumes it may be
+        // sharing the host with this stage, leaving 2 cpus free for
+        // Jenkins/Docker/OS the same way the pre-async design did.
         stage('Scans') {
             when { expression { !skipRun } }
             steps {
@@ -381,23 +576,17 @@ pipeline {
             }
         }
 
-        /* 4 ----------------------------------------------------------- */
-        // Fast update: everything except SonarQube is already done by this
-        // point (seconds to a couple of minutes), so the dashboard reflects
-        // real GitLeaks/Trivy/Checkov/AWS results here rather than making
-        // every viewer wait on SonarQube's own several-minutes-long analysis
-        // before seeing anything at all. SonarQube results fold in later,
-        // in stage 6, once its own stage actually finishes.
-        stage('AIOps engine & dashboard update (fast scanners)') {
+        /* 5 ----------------------------------------------------------- */
+        // GitLeaks/Trivy/Checkov are done; SAST for this run is whatever
+        // checkPendingSonarScan (stage 2) managed to catch up on - possibly
+        // fresh results from a scan that finished in the meantime, possibly
+        // nothing new if that scan (or the one launched by this very run) is
+        // still working, in which case the engine works with what it has,
+        // same as any other missing-report scanner.
+        stage('AIOps engine & dashboard update') {
             when { expression { !skipRun } }
             steps {
                 script {
-                    // The cloud governance monitor is a layer of its own rather
-                    // than a pipeline stage - it runs on a schedule independently
-                    // of any build. It is invoked here (once, not repeated in
-                    // stage 6) so that a pipeline run has current cloud findings
-                    // to correlate the scan results against, without querying
-                    // AWS a second time just because SonarQube runs later now.
                     runScanner('Cloud - AWS monitor', "${INPUT_DIR}/aws-findings.json") {
                         if (params.RUN_AWS_MONITOR) {
                             sh """
@@ -410,109 +599,7 @@ pipeline {
                         }
                     }
 
-                    runAiopsEngine('fast scanners only, SAST pending')
-                }
-            }
-        }
-
-        /* 5 ----------------------------------------------------------- */
-        // Runs alone now, not sharing the host with GitLeaks/Trivy/Checkov -
-        // they have already finished and their containers have already
-        // exited by the time this stage starts. That is what makes a much
-        // higher CPU cap here safe: previously 4 was the ceiling specifically
-        // to leave room for three other scanners running at the same time;
-        // with nothing else competing for cores, 6 of the host's 8 can go to
-        // this one scanner (2 held back so Jenkins/Docker/OS stay
-        // responsive - the same safety margin the old split preserved,
-        // just no longer split three ways).
-        stage('SAST - SonarQube') {
-            when { expression { !skipRun } }
-            steps {
-                script {
-                    runScanner('SAST - SonarQube', "${INPUT_DIR}/sonarqube-report.json") {
-                        // Only runs when a SonarQube server is configured; the
-                        // engine treats a missing report as "not scanned".
-                        if (env.SONAR_HOST_URL?.trim()) {
-                            // sonar.exclusions: the text/secrets sensor otherwise reads
-                            // every file under sonar.sources as text regardless of
-                            // language, including binaries - confirmed live, hundreds of
-                            // "Invalid character encountered, please fix encoding"
-                            // warnings for the demo target's own images/video/fonts,
-                            // each one still costing real scan time for a file that has
-                            // no source code to analyze in the first place.
-                            sh """
-                                docker run --rm --network ${SONAR_NETWORK} --cpus="6" \
-                                  -v "${toHostPath(params.SOURCE_DIR)}:/usr/src" \
-                                  -e SONAR_HOST_URL \
-                                  -e SONAR_TOKEN \
-                                  sonarsource/sonar-scanner-cli:latest \
-                                  -Dsonar.projectKey=${params.SONAR_PROJECT_KEY} \
-                                  -Dsonar.sources=/usr/src \
-                                  -Dsonar.scm.disabled=true \
-                                  -Dsonar.working.directory=/tmp/.scannerwork \
-                                  -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/build/**,**/coverage/**,**/*.min.js,**/screenshots/**,**/assets/private/**,**/*.{jpg,jpeg,png,gif,ico,svg,webp,avif,bmp,mp4,mov,webm,woff,woff2,ttf,eot,otf,pdf,zip}
-                            """
-                            // The scanner only SUBMITS the analysis; SonarQube
-                            // processes it asynchronously on a background
-                            // queue. Querying straight after "ANALYSIS
-                            // SUCCESSFUL" returns an empty issue list for a
-                            // project that in fact has findings, so wait for
-                            // the queue to drain before reading results.
-                            //
-                            // set +x: Jenkins traces sh steps with -x, which
-                            // would print the expanded token into the build
-                            // log. The credential is read from the environment
-                            // by the shell, never interpolated by Groovy.
-                            sh """
-                                set +x
-                                echo 'Waiting for SonarQube to finish processing the analysis...'
-                                settled=0
-                                for i in \$(seq 1 120); do
-                                    st=\$(curl -sS -m 15 -u "\$SONAR_TOKEN:" \
-                                        "\$SONAR_HOST_URL/api/ce/activity_status?component=${params.SONAR_PROJECT_KEY}" \
-                                        2>/dev/null || echo '')
-                                    case "\$st" in
-                                        *'"pending":0'*'"inProgress":0'*)
-                                            echo "  analysis processed after \$((i*5))s"
-                                            settled=1; break ;;
-                                        *'Insufficient privileges'*)
-                                            # A GLOBAL_ANALYSIS_TOKEN may submit an
-                                            # analysis but not read the queue, so
-                                            # polling would 403 until it gave up.
-                                            echo "  WARNING: SONAR_TOKEN cannot read the analysis queue."
-                                            echo "  Generate a USER_TOKEN instead of a GLOBAL_ANALYSIS_TOKEN,"
-                                            echo "  otherwise results may be read before they are ready."
-                                            settled=1; break ;;
-                                    esac
-                                    sleep 5
-                                done
-                                [ "\$settled" = 1 ] || echo "  WARNING: still processing after 10 min - results may be incomplete."
-
-                                curl -sS -u "\$SONAR_TOKEN:" \
-                                  "\$SONAR_HOST_URL/api/issues/search?componentKeys=${params.SONAR_PROJECT_KEY}&types=VULNERABILITY&ps=500" \
-                                  -o ${INPUT_DIR}/sonarqube-report.json
-                            """
-                        } else {
-                            echo 'SONAR_HOST_URL not set - skipping SAST stage.'
-                            scanStatus['SAST - SonarQube'] = 'skipped'
-                        }
-                    }
-                }
-            }
-        }
-
-        /* 6 ----------------------------------------------------------- */
-        // Final update: re-runs the engine now that SonarQube's report (or
-        // its absence) is known, folding SAST into the same run rather than
-        // starting a new one - runAiopsEngine reuses --run-id build-${BUILD_NUMBER}
-        // from stage 4, and history_tracker.py replaces that run's entry
-        // rather than duplicating it, so the dashboard sees this run's
-        // numbers become complete, not a second build appear.
-        stage('AIOps engine & dashboard update (final)') {
-            when { expression { !skipRun } }
-            steps {
-                script {
-                    def out = runAiopsEngine('complete, including SAST')
+                    def out = runAiopsEngine('complete')
 
                     if (params.FAIL_ON_CRITICAL && out.health_score < 30) {
                         error "Health score ${out.health_score} is below the acceptable threshold"

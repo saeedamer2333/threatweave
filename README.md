@@ -288,12 +288,67 @@ than setting keys as environment variables — the dashboard's Settings page
 only ever *reports* what Boto3 already resolved, matching the project's "no
 credentials in the product" posture described below.
 
-**Scanning your own project in this mode** works the same way as the split
-setup, just via bind mounts instead of `.env`: mount your project read-only
-at `/target` (`-v /path/to/project:/target:ro`) and set `HOST_WORKSPACE` to
-this image's own project checkout path on the host if you want the Jenkins
-pipeline to actually run — see the trade-off note below and
-[`HOST_WORKSPACE` — why it exists](#host_workspace--why-it-exists).
+**Scanning your own project in this mode.** The command above is the
+demo-only quick start — it works with no further setup specifically
+*because* it never scans anything outside the image, so skip this part if
+the bundled Juice Shop demo is all you need.
+
+To scan a real project, know first what `/workspace` actually is inside
+this image: everything the pipeline needs (`aiops_engine/`, `aws_monitor/`,
+`infra/`, and where scan reports land) is baked in at `/workspace`, not
+bind-mounted from the host. That is fine for the demo, but scanners run as
+**sibling containers** through the mounted Docker socket (see
+[`HOST_WORKSPACE` — why it exists](#host_workspace--why-it-exists) below) —
+their volume mounts are resolved by the *host* Docker daemon, not from
+inside this container. So a scanner told to write its report to
+`/workspace/findings/scan-inputs` writes it into a location this
+container's baked-in `/workspace` has no relationship to at all, unless
+`/workspace` is *also* a real, bind-mounted host directory that both sides
+agree on. That means scanning your own project needs three things, not
+one — replacing the baked-in `/workspace` with a real host checkout of this
+repo (so `aiops_engine/`/`aws_monitor/`/`infra/` still exist), pointing
+`HOST_WORKSPACE` at that same host path, and mounting your project at
+`/target`:
+
+```bash
+git clone https://github.com/saeedamer2333/threatweave.git
+# /path/to/threatweave/implementation below is this clone's own absolute
+# host path (implementation/, the same directory Option 2's HOST_WORKSPACE
+# points at) - it only needs to exist and contain aiops_engine/,
+# aws_monitor/ and infra/, the same three directories the image bakes in
+# by default.
+
+docker run -d --name threatweave \
+  -p 3000:80 -p 4000:4000 -p 8080:8080 -p 50000:50000 -p 9000:9000 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v threatweave-jenkins-home:/var/jenkins_home \
+  -v /path/to/threatweave/implementation:/workspace \
+  -v /path/to/your-project:/target:ro \
+  -e HOST_WORKSPACE=/path/to/threatweave/implementation \
+  -e TARGET_PATH=/path/to/your-project \
+  saeedalameri/threatweave:latest
+```
+
+Both `/path/to/threatweave/implementation` and `/path/to/your-project` are
+host paths, used identically to `HOST_WORKSPACE` and `TARGET_PATH` in
+`.env` for the docker-compose setup (Option 2) — this is the same
+mechanism, just passed as `-e` flags instead of an env file. Dropped the
+`threatweave-findings` named volume here on purpose: it would otherwise
+shadow the host checkout's own `findings/` subdirectory, which is what
+actually persists scan history now that `/workspace` is a real host
+directory rather than the image's baked-in copy.
+
+The practical trade-off this leaves: the all-in-one image's one-command
+convenience is really only "one command" for the bundled demo. Scanning a
+real project still needs a host-side clone of this repo either way,
+identical to what Option 2 already requires — so if you already know
+you're scanning your own project rather than trying the demo first,
+Option 2's docker-compose setup gets you there with less to reconcile,
+and doesn't also require freeing up ports 3000/8080/9000 from any other
+ThreatWeave instance already running first. Prefer this option for trying
+the bundled demo with zero setup, or when a single container genuinely
+matters more than that — not as the simpler path to scanning your own
+project, since it isn't one.
 
 **The honest trade-off**, stated in the Dockerfile too: one container means
 one thing to restart for any change, and Jenkins' need for host-level

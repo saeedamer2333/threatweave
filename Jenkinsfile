@@ -217,16 +217,24 @@ def checkPendingSonarScan() {
     }
 
     if (state == 'running') {
-        def ageMin = (System.currentTimeMillis() - (pending.started_at_epoch_ms as Long)) / 60000
+        // Long.intdiv() rather than Groovy's own `/` deliberately - `/`
+        // between two longs returns a BigDecimal, and BigDecimal.trunc()
+        // (used here in an earlier version to print a whole-number minute
+        // count) is not a real method - confirmed live, it broke every
+        // single run with a MissingMethodException the instant a pending
+        // scan was found still running, before any real scanner ever got a
+        // chance to execute. intdiv() returns a plain long, so there is no
+        // decimal to truncate in the first place.
+        def ageMin = (System.currentTimeMillis() - (pending.started_at_epoch_ms as Long)).intdiv(60000)
         // 20 min is generous headroom over the ~5 min this scan normally
         // takes - this only fires if something is genuinely stuck, so a
         // slow-but-healthy run is never mistaken for one.
         if (ageMin > 20) {
-            echo "WARNING: SonarQube scan from ${pending.run_id} has been running for ${ageMin.trunc()} min - assuming it is stuck and killing it."
+            echo "WARNING: SonarQube scan from ${pending.run_id} has been running for ${ageMin} min - assuming it is stuck and killing it."
             sh "docker rm -f ${container} 2>/dev/null || true"
             sh "rm -f ${sonarPendingMarker()}"
         } else {
-            echo "SonarQube scan from ${pending.run_id} is still running (${ageMin.trunc()} min so far) - will check again next run."
+            echo "SonarQube scan from ${pending.run_id} is still running (${ageMin} min so far) - will check again next run."
             // Not overwritten with 'pending' when a last-good report was
             // already seeded above - the dashboard still has real numbers
             // to show, they are just not from this run's commit yet.

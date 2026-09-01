@@ -51,6 +51,22 @@ const TRIGGERED = {
 const NO_CRUMB = { ok: false, status: 404 } as Response;
 const QUEUE_RESOLVED = jsonResponse({ executable: { number: 7, url: 'http://jenkins:8080/job/threatweave-pipeline/7/' } });
 
+/** triggerBuild now checks Jenkins' real lastBuild state before deciding
+ * whether to actually trigger anything (closes the race where a build
+ * Jenkins started on its own - its cron trigger, confirmed live - is still
+ * genuinely running while this service's own tracked status is stale
+ * idle), so every test exercising a real trigger needs this as its
+ * leading mock response, reporting nothing currently running. */
+const NOT_BUILDING = jsonResponse({
+  building: false, number: 6, url: 'http://jenkins:8080/job/threatweave-pipeline/6/', timestamp: Date.now(),
+});
+
+/** checkJenkinsQueue's own check, reporting nothing queued for this job -
+ * triggerBuild falls through to this right after NOT_BUILDING (see its
+ * own comment), so every test exercising a real trigger needs both, in
+ * that order. */
+const EMPTY_QUEUE = jsonResponse({ items: [] });
+
 describe('JenkinsService', () => {
   let service: JenkinsService;
   let fetchMock: jest.Mock;
@@ -163,6 +179,58 @@ describe('JenkinsService', () => {
     expect(second.state).toBe('queued');
   });
 
+  // ---- Regression: confirmed live. The periodic idle-reconcile poll only
+  // checks Jenkins every 15s, so a build Jenkins started on its own (its
+  // cron trigger, or someone using Jenkins' UI directly) moments before a
+  // "Run scan" click could still be genuinely running while this.status
+  // was stale idle - "Run scan" stayed clickable in that narrow window,
+  // queuing a redundant second build behind the one already going.
+  it('attaches to a build Jenkins already started on its own, rather than triggering a redundant second one', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      building: true, number: 314, url: 'http://jenkins:8080/job/threatweave-pipeline/314/', timestamp: Date.now(),
+    }));
+
+    const result = await service.triggerBuild(SETTINGS);
+
+    expect(result.state).toBe('running');
+    expect(result.buildNumber).toBe(314);
+    // Only the fresh lastBuild check should have run - a crumb fetch or a
+    // buildWithParameters POST here would mean a second, redundant build
+    // was triggered on top of the one Jenkins already had going.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // ---- Regression: confirmed live. A build accepted into Jenkins' queue
+  // is not yet "lastBuild" - no build number exists until an executor
+  // actually picks it up - so reconcileWithJenkins alone cannot see it:
+  // lastBuild.building still points at whatever finished before it.
+  // Triggered a build directly against Jenkins, then called triggerBuild()
+  // a moment later, before Jenkins had assigned the first one a build
+  // number - it went ahead and submitted a second, genuinely separate
+  // queue item on top of the first instead of attaching to it.
+  it('attaches to a build only queued so far (not yet assigned a build number), not just an already-running one', async () => {
+    fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING) // lastBuild: nothing running
+      .mockResolvedValueOnce(jsonResponse({ // but the queue already has one for this job
+        items: [{ id: 648, task: { name: 'threatweave-pipeline' } }],
+      }))
+      .mockResolvedValueOnce(jsonResponse({ // that queue item resolves to a real build
+        executable: { number: 317, url: 'http://jenkins:8080/job/threatweave-pipeline/317/' },
+      }));
+
+    const result = await service.triggerBuild(SETTINGS);
+    expect(result.state).toBe('queued');
+
+    await jest.advanceTimersByTimeAsync(2000); // queue poll tick
+
+    expect(service.getStatus().state).toBe('running');
+    expect(service.getStatus().buildNumber).toBe(317);
+    // Only the lastBuild + queue checks (plus the queue-item poll) should
+    // have run - a crumb fetch or buildWithParameters POST here would mean
+    // a second, redundant build was submitted on top of the queued one.
+    expect(fetchMock.mock.calls.some(([url]) => (url as string).includes('buildWithParameters'))).toBe(false);
+  });
+
   it('reports failed with a clear error when Jenkins is unreachable', async () => {
     fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
 
@@ -174,6 +242,8 @@ describe('JenkinsService', () => {
 
   it('reports failed when Jenkins rejects the trigger request', async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(jsonResponse({}, { ok: false, status: 403 })) // crumb issuer
       .mockResolvedValueOnce({ ok: false, status: 404 } as Response); // buildWithParameters
 
@@ -193,6 +263,8 @@ describe('JenkinsService', () => {
   // a real build was running the entire time.
   it('reconciles with the running build rather than failing when Jenkins returns no Location header', async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce({ ok: true, headers: new Headers() } as Response) // 200, no Location
       .mockResolvedValueOnce(jsonResponse({
@@ -207,6 +279,8 @@ describe('JenkinsService', () => {
 
   it('still reports failed when there is no Location header and no build is actually running', async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce({ ok: true, headers: new Headers() } as Response) // 200, no Location
       .mockResolvedValueOnce(jsonResponse({ building: false, number: 44, url: '', timestamp: Date.now() }));
@@ -218,13 +292,17 @@ describe('JenkinsService', () => {
   });
 
   it('proceeds without a crumb when no crumb issuer is available', async () => {
-    fetchMock.mockResolvedValueOnce(NO_CRUMB).mockResolvedValueOnce(TRIGGERED);
+    fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
+      .mockResolvedValueOnce(NO_CRUMB)
+      .mockResolvedValueOnce(TRIGGERED);
 
     const status = await service.triggerBuild(SETTINGS);
 
     expect(status.state).toBe('queued');
     // No crumb header should have been required for the call to succeed.
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it('sends the crumb together with its session cookie, not the crumb alone', async () => {
@@ -233,6 +311,8 @@ describe('JenkinsService', () => {
     // Set-Cookie it came with produces a 403 even though the crumb value
     // itself is correct.
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockImplementationOnce(async () => ({
         ok: true,
         headers: new Headers({ 'set-cookie': 'JSESSIONID.abc=xyz; Path=/; HttpOnly' }),
@@ -251,6 +331,8 @@ describe('JenkinsService', () => {
 
   it('resolves queued -> running -> success, and surfaces live console activity along the way', async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce(TRIGGERED)
       .mockResolvedValueOnce(QUEUE_RESOLVED)
@@ -284,6 +366,8 @@ describe('JenkinsService', () => {
   // picking "the last line" verbatim surfaces it straight to the UI.
   it('skips Jenkins\' own invisible ConsoleNote blobs when picking the current activity line', async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce(TRIGGERED)
       .mockResolvedValueOnce(QUEUE_RESOLVED)
@@ -304,6 +388,8 @@ describe('JenkinsService', () => {
 
   it('also skips the ConsoleNote blob when its ESC byte itself did not survive transport', async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce(TRIGGERED)
       .mockResolvedValueOnce(QUEUE_RESOLVED)
@@ -322,6 +408,8 @@ describe('JenkinsService', () => {
 
   it('tracks which declared stage is currently running, from the console\'s own stage markers', async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce(TRIGGERED)
       .mockResolvedValueOnce(QUEUE_RESOLVED)
@@ -346,6 +434,8 @@ describe('JenkinsService', () => {
   // surface for the UI to highlight correctly.
   it('accumulates every scanner branch active in a run, not just the most recent line', async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce(TRIGGERED)
       .mockResolvedValueOnce(QUEUE_RESOLVED)
@@ -375,6 +465,8 @@ describe('JenkinsService', () => {
   // actually finished.
   it('clears previously-active parallel branches once a dedicated sequential stage starts', async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce(TRIGGERED)
       .mockResolvedValueOnce(QUEUE_RESOLVED)
@@ -414,6 +506,8 @@ describe('JenkinsService', () => {
   // origin always comes from our own JENKINS_URL, never from Jenkins itself.
   it("rebases Jenkins' self-reported queue and build URLs onto our own JENKINS_URL, never trusting their origin", async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce({
         ok: true,
@@ -446,6 +540,8 @@ describe('JenkinsService', () => {
   // genuinely running.
   it('strips the "Branch: " prefix Jenkins adds to parallel-step stage markers', async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce(TRIGGERED)
       .mockResolvedValueOnce(QUEUE_RESOLVED)
@@ -465,6 +561,8 @@ describe('JenkinsService', () => {
 
   it('reports failed with the build result when the pipeline fails', async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce(TRIGGERED)
       .mockResolvedValueOnce(QUEUE_RESOLVED)
@@ -488,6 +586,8 @@ describe('JenkinsService', () => {
   // wrong. These lock in that a stall now surfaces as a clear failure.
   it('gives up while queued after losing contact with Jenkins for too long', async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce(TRIGGERED)
       .mockRejectedValue(new Error('fetch failed')); // every poll after this fails
@@ -504,6 +604,8 @@ describe('JenkinsService', () => {
 
   it('does not give up while polling is merely slow, only once truly stalled', async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce(TRIGGERED)
       // Two failures, then a real response - simulates a brief blip that
@@ -528,6 +630,8 @@ describe('JenkinsService', () => {
   // as long as output keeps arriving.
   it('does not report a stall while the console keeps producing new output, even if individual polls fail', async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce(TRIGGERED)
       .mockResolvedValueOnce(QUEUE_RESOLVED)
@@ -554,6 +658,8 @@ describe('JenkinsService', () => {
   // polling instead.
   it('flags a running build as stalled (not failed) after no new console output for 5 minutes, and keeps polling', async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce(TRIGGERED)
       .mockResolvedValueOnce(QUEUE_RESOLVED)
@@ -573,6 +679,8 @@ describe('JenkinsService', () => {
 
   it('clears the stalled flag as soon as real output resumes, without ever reaching failed', async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce(TRIGGERED)
       .mockResolvedValueOnce(QUEUE_RESOLVED)
@@ -593,6 +701,8 @@ describe('JenkinsService', () => {
 
   it('truly gives up on a running build only after the much longer hard ceiling with zero output', async () => {
     fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce(TRIGGERED)
       .mockResolvedValueOnce(QUEUE_RESOLVED)

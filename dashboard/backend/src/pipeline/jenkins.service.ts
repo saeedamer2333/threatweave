@@ -126,7 +126,9 @@ export class JenkinsService implements OnModuleInit, OnModuleDestroy {
     // service *did* start is actually in flight.
     this.idleReconcileTimer = setInterval(() => {
       if (this.status.state === 'idle' || this.status.state === 'success' || this.status.state === 'failed') {
-        void this.reconcileWithJenkins();
+        void this.reconcileWithJenkins().then((attached) => {
+          if (!attached) void this.checkJenkinsQueue();
+        });
       }
     }, IDLE_RECONCILE_MS);
   }
@@ -161,6 +163,43 @@ export class JenkinsService implements OnModuleInit, OnModuleDestroy {
       return true;
     } catch (err) {
       this.logger.warn(`Could not check Jenkins' last build: ${(err as Error).message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Checks Jenkins' own queue for a pending item belonging to this job -
+   * the blind spot reconcileWithJenkins alone has. A build accepted into
+   * the queue is not yet "lastBuild" (no build number exists until an
+   * executor picks it up), so lastBuild.building stays pointed at
+   * whatever finished before it. Confirmed live: triggered a build
+   * directly against Jenkins, then called triggerBuild() a moment later -
+   * before Jenkins had assigned it a build number - and it went ahead and
+   * submitted a second, genuinely separate queue item instead of
+   * attaching to the first. disableConcurrentBuilds() serialised them so
+   * nothing broke outright, but two full scans ran back to back where one
+   * request had been made, exactly the "why": "Build #N is already in
+   * progress" pattern this project's history already knew Jenkins produces
+   * when a request's parameters differ from an already-queued item's own
+   * (so it cannot be merged into it the way an identical one would be).
+   */
+  private async checkJenkinsQueue(): Promise<boolean> {
+    try {
+      const res = await this.fetchJenkins(`${JENKINS_URL}/queue/api/json`);
+      if (!res.ok) {
+        await this.drain(res);
+        return false;
+      }
+      const body = (await res.json()) as { items?: { id: number; task?: { name?: string } }[] };
+      const existing = body.items?.find((item) => item.task?.name === JOB_NAME);
+      if (!existing) return false;
+
+      const startedAt = new Date().toISOString();
+      this.status = { state: 'queued', startedAt };
+      this.pollQueueThenBuild(`${JENKINS_URL}/queue/item/${existing.id}/`, startedAt);
+      return true;
+    } catch (err) {
+      this.logger.warn(`Could not check Jenkins' queue: ${(err as Error).message}`);
       return false;
     }
   }
@@ -254,8 +293,33 @@ export class JenkinsService implements OnModuleInit, OnModuleDestroy {
       return this.status;
     }
 
+    // Claimed synchronously, before any `await`, so a second call arriving
+    // while everything below is still in flight - including the
+    // reconcile check just after this - is caught by the exact same guard
+    // above a rapid double-click always was, rather than only once this
+    // call finishes. Overwritten with the real build's own info below if
+    // reconcileWithJenkins finds this run should attach to one instead.
     const startedAt = new Date().toISOString();
     this.status = { state: 'queued', startedAt };
+
+    // Closes a real race, not just a theoretical one: the periodic
+    // idle-reconcile poll only checks Jenkins every 15s, so a build that
+    // started independently (cron, or Jenkins' own UI) moments before this
+    // exact click can still be genuinely running in Jenkins while
+    // `this.status` was stale idle/success/failed a moment ago - confirmed
+    // live, "Run scan" clickable in that narrow window right after such a
+    // build started, queuing a redundant second one behind it. One fresh
+    // check here, synchronously as part of handling the click itself,
+    // closes it regardless of how the background poll happens to be timed.
+    if (await this.reconcileWithJenkins()) {
+      return this.status;
+    }
+    // reconcileWithJenkins only sees a build that already has an executor
+    // - this catches the narrower but real window where one is merely
+    // queued (see checkJenkinsQueue's own comment).
+    if (await this.checkJenkinsQueue()) {
+      return this.status;
+    }
 
     try {
       const crumb = await this.getCrumb();

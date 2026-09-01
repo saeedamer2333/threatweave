@@ -508,11 +508,18 @@ function Content({ view, data, onGoto, onReload, scan, elapsedLabel, asyncSonarS
             <colgroup>
               <col style={{ width: 34 }} />
               <col style={{ width: 68 }} />
-              <col style={{ width: 84 }} />
-              <col style={{ width: '30%' }} />
+              {/* Severity/Confidence widened from 84/96px - too narrow for
+                  their own uppercase, letter-spaced header labels
+                  ("SEVERITY", "CONFIDENCE"), confirmed live showing as
+                  truncated "SEVERI…"/"CONFIDE…" instead. Title/Resource
+                  trimmed by a matching couple of percent so the table's
+                  total width is unchanged - still fits the screen with no
+                  horizontal scroll needed, just redistributed. */}
+              <col style={{ width: 104 }} />
+              <col style={{ width: '28%' }} />
               <col style={{ width: 90 }} />
-              <col style={{ width: '24%' }} />
-              <col style={{ width: 96 }} />
+              <col style={{ width: '22%' }} />
+              <col style={{ width: 116 }} />
             </colgroup>
             <thead>
               <tr><th></th><th>Risk</th><th>Severity</th><th>Title</th><th>Source</th><th>Resource</th><th>Confidence</th></tr>

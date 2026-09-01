@@ -395,6 +395,26 @@ pipeline {
                         mkdir -p ${INPUT_DIR}
                         rm -f ${INPUT_DIR}/*.json || true
                     """
+                    // git refuses to operate on a repo it does not own by
+                    // default ("detected dubious ownership") - confirmed
+                    // live: the demo target's .git is owned by root (however
+                    // it was cloned/fetched) while Jenkins runs as the
+                    // jenkins user, so every git command below silently
+                    // failed and got swallowed by its own `|| echo`
+                    // fallback. That is not just cosmetic - it is exactly
+                    // what the "skip if nothing changed" check just below
+                    // depends on, so the failure defeated it completely:
+                    // every 5-minute cron tick saw an empty commit hash,
+                    // could never match a previous one, and ran a full scan
+                    // forever regardless of whether the target had changed
+                    // at all. This is trusted, single-tenant local infra (the
+                    // same posture already applied to the mounted Docker
+                    // socket above), so the ownership check has no value
+                    // here - disabled globally rather than per-repo so a
+                    // custom scan target hits the same fix with no
+                    // additional setup.
+                    sh "git config --global --add safe.directory '*'"
+
                     // The project is bind-mounted at /workspace, so there is no
                     // clone step. Record the revision when it is a git checkout.
                     sh """

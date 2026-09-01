@@ -1587,7 +1587,19 @@ function DismissPanel({ f, onDone }: { f: Finding; onDone: () => void }) {
       const body: NewSuppression = { reason: reason.trim(), created_by: 'dashboard' };
       if (scope === 'this') {
         if (f.cve_id) body.cve_id = f.cve_id;
-        else { body.source = f.source; body.resource_pattern = f.affected_resource; }
+        else {
+          // source + resource_pattern alone is too broad whenever a tool
+          // reports more than one distinct check against the same
+          // resource - confirmed live: Checkov flagged 7 different checks
+          // against one S3 bucket, all sharing the exact same
+          // affected_resource string, so "only this finding" ended up
+          // suppressing all 7 instead of the one the analyst actually
+          // picked. rule_id (when the finding has one) narrows the match
+          // back down to that single check.
+          body.source = f.source;
+          body.resource_pattern = f.affected_resource;
+          if (f.rule_id) body.rule_id = f.rule_id;
+        }
       } else if (scope === 'rule') {
         body.source = f.source;
         body.rule_id = f.rule_id!;

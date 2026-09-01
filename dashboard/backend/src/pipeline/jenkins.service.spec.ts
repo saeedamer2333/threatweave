@@ -234,6 +234,52 @@ describe('JenkinsService', () => {
     expect(service.getStatus().state).toBe('success');
   });
 
+  // ---- Regression: confirmed live on the dashboard - the sidebar's
+  // "currently running" activity line showed raw garbage
+  // ("[8mha://///4A1C/AEGgMlM2y2Nxw...") instead of anything readable.
+  // Jenkins embeds invisible metadata for its own web UI (a ConsoleNote,
+  // fixed "ha:" preamble) directly in the raw console byte stream, wrapped
+  // in an ANSI "conceal" escape sequence real terminals never display -
+  // but a plain-text poll of the console has no terminal to hide it, and
+  // picking "the last line" verbatim surfaces it straight to the UI.
+  it('skips Jenkins\' own invisible ConsoleNote blobs when picking the current activity line', async () => {
+    fetchMock
+      .mockResolvedValueOnce(NO_CRUMB)
+      .mockResolvedValueOnce(TRIGGERED)
+      .mockResolvedValueOnce(QUEUE_RESOLVED)
+      .mockResolvedValueOnce(textResponse(
+        '[2026-09-01T12:20:59.820Z] Waiting for SonarQube scan from build-232 to finish (2 min so far)...\n' +
+        '\x1b[8mha:////4A1C/AEGgMlM2y2NxwCaOCOIhqQC+zUw3EOAoDv8Z0HmAAAApB+LCAAAAAAAAP9tjTEOwjAQBC9BFLSUPMLpCBKiSmul4Q\x1b[0m\n',
+        { moreData: true, nextOffset: 90 },
+      ));
+
+    await service.triggerBuild(SETTINGS);
+    await jest.advanceTimersByTimeAsync(2000);
+    await jest.advanceTimersByTimeAsync(3000);
+
+    expect(service.getStatus().currentActivity).toBe(
+      'Waiting for SonarQube scan from build-232 to finish (2 min so far)...',
+    );
+  });
+
+  it('also skips the ConsoleNote blob when its ESC byte itself did not survive transport', async () => {
+    fetchMock
+      .mockResolvedValueOnce(NO_CRUMB)
+      .mockResolvedValueOnce(TRIGGERED)
+      .mockResolvedValueOnce(QUEUE_RESOLVED)
+      .mockResolvedValueOnce(textResponse(
+        '[2026-09-01T12:20:59.820Z] Sleeping for 15 sec\n' +
+        '[8mha:////4A1C/AEGgMlM2y2NxwCaOCOIhqQC+zUw3EOAoDv8Z0HmAAAApB+LCAAAAAAAAP9tjTEOwjAQBC9BFLSUPMLpCBKiSmul4Q[0m\n',
+        { moreData: true, nextOffset: 90 },
+      ));
+
+    await service.triggerBuild(SETTINGS);
+    await jest.advanceTimersByTimeAsync(2000);
+    await jest.advanceTimersByTimeAsync(3000);
+
+    expect(service.getStatus().currentActivity).toBe('Sleeping for 15 sec');
+  });
+
   it('tracks which declared stage is currently running, from the console\'s own stage markers', async () => {
     fetchMock
       .mockResolvedValueOnce(NO_CRUMB)

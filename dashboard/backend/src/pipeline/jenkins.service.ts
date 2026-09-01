@@ -530,14 +530,43 @@ function describeCause(err: unknown): string {
   return String(cause);
 }
 
-/** The last non-blank line of a console chunk, with Jenkins' timestamp
- * prefix (from the `timestamps()` pipeline option) stripped, trimmed to a
- * reasonable length for a one-line UI display. */
+/** Jenkins embeds invisible metadata for its own web UI (hyperlinks on a
+ * build's stage/step markers) directly in the raw console byte stream,
+ * wrapped in an ANSI "conceal" escape sequence - invisible in a real
+ * terminal or Jenkins' own UI (which strips it before rendering), but
+ * confirmed live to leak through verbatim as literal garbage
+ * (`[8mha://///4A1C/AEGgMlM2y2Nxw...`) when picked up as plain text the
+ * way this poll does. `ha:` is ConsoleNote's own fixed preamble, unique
+ * enough to not risk matching any real scanner/shell output. */
+const JENKINS_CONSOLE_NOTE = /\x1b?\[8mha:\S*(\x1b?\[0?m)?/g;
+
+/** Real ANSI CSI escape sequences (colour codes, cursor moves, ...) that a
+ * scanner's own coloured output can legitimately contain - stripped so a
+ * one-line UI display never shows raw control-code text. */
+const ANSI_ESCAPE = /\x1b\[[0-9;]*[a-zA-Z]/g;
+
+function cleanConsoleLine(line: string): string {
+  return line.replace(JENKINS_CONSOLE_NOTE, '').replace(ANSI_ESCAPE, '').trim();
+}
+
+/** The last genuinely human-readable line of a console chunk, with
+ * Jenkins' timestamp prefix (from the `timestamps()` pipeline option) and
+ * any invisible-in-a-real-terminal control data stripped, trimmed to a
+ * reasonable length for a one-line UI display. Scans backward rather than
+ * only ever looking at the true last line, since that line is sometimes
+ * nothing but one of Jenkins' own ConsoleNote blobs once cleaned - in
+ * which case the most recent real line before it is what a viewer
+ * actually wants to see. */
 function latestLine(chunk: string): string | null {
   const lines = chunk.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  if (!lines.length) return null;
-  const last = lines[lines.length - 1].replace(/^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z]\s*/, '');
-  return last.length > 160 ? `${last.slice(0, 160)}…` : last;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const withoutTimestamp = lines[i].replace(/^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z]\s*/, '');
+    const cleaned = cleanConsoleLine(withoutTimestamp);
+    if (cleaned) {
+      return cleaned.length > 160 ? `${cleaned.slice(0, 160)}…` : cleaned;
+    }
+  }
+  return null;
 }
 
 /** Known scanner names, both as declarative stage markers and as parallel

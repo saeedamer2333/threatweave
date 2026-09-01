@@ -6,6 +6,35 @@ import './App.css';
 
 type View = 'overview' | 'findings' | 'clusters' | 'history' | 'settings';
 
+/**
+ * Suppression rules only take effect the next time the engine actually
+ * runs (`suppressor.py` reads them at that point) - creating or revoking
+ * one just writes to `suppression_rules.json` and returns, so a finding
+ * that was just dismissed keeps showing until something re-scores. Rather
+ * than make every analyst learn that and go click "Run scan" themselves
+ * (which now triggers the full ~10 minute Jenkins pipeline, not what this
+ * needs), this fires the fast local re-score - `POST /scan`, the same
+ * `engine.py` pass over whatever reports already exist in scan-inputs/,
+ * seconds not minutes - right after the write, so "Dismiss"/"Restore"
+ * actually feel immediate. Best-effort: if a real pipeline scan happens to
+ * be running at the same moment (rare - a narrow window, and reading a
+ * mid-write scan-inputs/ is not worse than what a normal run already
+ * tolerates from a slow scanner), this silently no-ops rather than
+ * surfacing a second error on top of whatever the caller already reports.
+ */
+async function rescoreAfterSuppressionChange(): Promise<void> {
+  try {
+    await api.startScan();
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      const s = await api.getScanStatus();
+      if (s.state === 'success' || s.state === 'failed') return;
+    }
+  } catch {
+    // Best-effort - see the function comment above.
+  }
+}
+
 /** Placeholder shown in place of real scan output before any scan has ever
  * completed - so the dashboard's actual structure (nav, Settings, zeroed-out
  * stat cards) renders immediately instead of the entire page being replaced
@@ -572,6 +601,7 @@ function SettingsPanel({ data, onReload }: { data: AiopsOutput; onReload: () => 
   const revoke = async (id: string) => {
     await api.revokeSuppression(id);
     refresh();
+    await rescoreAfterSuppressionChange();
     onReload();
   };
 
@@ -1567,6 +1597,7 @@ function DismissPanel({ f, onDone }: { f: Finding; onDone: () => void }) {
       }
       await api.createSuppression(body);
       setOpen(false); setReason('');
+      await rescoreAfterSuppressionChange();
       onDone();
     } catch (e) {
       setErr((e as Error).message);

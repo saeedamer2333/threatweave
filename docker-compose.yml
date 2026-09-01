@@ -107,6 +107,19 @@ services:
       # actually mounted there (e.g. a package.json name) to suggest real
       # Pipeline target defaults instead of leaving them pinned to the demo.
       - ${TARGET_PATH:-./demo-app}:/target:ro
+      # Queried read-only in code (GET requests only) over the Docker
+      # Engine HTTP API - no docker CLI needed in this image - so the
+      # dashboard can report whether the async SonarQube scan launched by
+      # the Jenkinsfile is genuinely still running right now. The mount
+      # itself is deliberately NOT `:ro`: opening a Unix domain socket at
+      # all needs bidirectional access even to only ever send GETs over it,
+      # so a read-only bind mount would break the connection outright
+      # rather than merely prevent writes. The marker file alone (checked
+      # by Jenkins on its own next run) says a scan was launched, not
+      # whether it is still going, already finished and waiting to be
+      # picked up, or the container is simply gone - real-time state no
+      # build is necessarily around to report between runs.
+      - /var/run/docker.sock:/var/run/docker.sock
 
   dashboard:
     build:

@@ -20,6 +20,11 @@ export class SettingsController {
     return this.settings.checkSonarQubeStatus();
   }
 
+  @Get('sonarqube-scan-status')
+  checkAsyncSonarScan() {
+    return this.settings.checkAsyncSonarScan();
+  }
+
   @Put()
   update(@Body() body: Partial<AppSettings>) {
     return this.settings.update(body);

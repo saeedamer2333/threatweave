@@ -23,6 +23,12 @@ findings/**/*.json
 # findings) - runtime-generated per environment, not something to commit.
 findings/gitleaks-state/
 
+# The Checkout stage's "skip an auto-triggered run if nothing changed"
+# marker (the demo target's last-scanned commit hash) - runtime state tied
+# to whatever target this specific environment happens to be scanning,
+# not something a fresh clone should start with a stale value for.
+findings/.last-scanned-commit
+
 # Vendored demo scan target (OWASP Juice Shop, ~95MB) - fetched on demand by
 # scripts/fetch-demo-target.sh rather than committed, so the repo stays small
 # and focused on ThreatWeave's own code.

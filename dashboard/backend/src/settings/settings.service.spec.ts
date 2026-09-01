@@ -1,5 +1,6 @@
 jest.mock('fs/promises');
 jest.mock('fs');
+jest.mock('http');
 jest.mock('../config/paths', () => ({
   PATHS: { findingsDir: '/fake/findings', target: '/fake/target' },
 }));
@@ -7,7 +8,47 @@ jest.mock('../config/paths', () => ({
 import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import * as http from 'http';
+import type { IncomingMessage, ClientRequest } from 'http';
 import { SettingsService } from './settings.service';
+
+const mockHttpRequest = http.request as jest.MockedFunction<typeof http.request>;
+
+/** Simulates the Docker Engine API's response to a `dockerGet` call - a
+ * real `http.request` callback receives an IncomingMessage that emits
+ * 'data'/'end', not something a Promise-based mock can stand in for
+ * directly. */
+function mockDockerResponse(statusCode: number, body: unknown) {
+  mockHttpRequest.mockImplementation(((_opts: unknown, callback: (res: Partial<IncomingMessage>) => void) => {
+    const listeners: Record<string, (arg?: unknown) => void> = {};
+    const res: Partial<IncomingMessage> = {
+      statusCode,
+      on: ((event: string, handler: (arg?: unknown) => void) => {
+        listeners[event] = handler;
+        return res as IncomingMessage;
+      }) as IncomingMessage['on'],
+    };
+    callback(res);
+    listeners.data?.(Buffer.from(JSON.stringify(body)));
+    listeners.end?.();
+    return { on: jest.fn(), end: jest.fn(), destroy: jest.fn() } as unknown as ClientRequest;
+  }) as typeof http.request);
+}
+
+function mockDockerSocketError(message: string) {
+  mockHttpRequest.mockImplementation(((_opts: unknown, _callback: unknown) => {
+    const listeners: Record<string, (arg?: unknown) => void> = {};
+    const req = {
+      on: ((event: string, handler: (arg?: unknown) => void) => {
+        listeners[event] = handler;
+        return req;
+      }) as unknown,
+      end: jest.fn(() => listeners.error?.(new Error(message))),
+      destroy: jest.fn(),
+    };
+    return req as unknown as ClientRequest;
+  }) as typeof http.request);
+}
 
 const SETTINGS_PATH = join('/fake/findings', 'settings.json');
 
@@ -323,6 +364,73 @@ describe('SettingsService', () => {
         crashReason: 'other',
         message: 'SonarQube was running but is not responding now.',
       });
+    });
+  });
+
+  describe('checkAsyncSonarScan', () => {
+    it('reports not scanning when no scan has ever been launched (no marker file)', async () => {
+      mockExistsSync.mockReturnValue(false);
+
+      const result = await service.checkAsyncSonarScan();
+
+      expect(result).toEqual({ scanning: false });
+    });
+
+    it('reports not scanning when the marker file is unparsable', async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockResolvedValue('not json' as never);
+
+      const result = await service.checkAsyncSonarScan();
+
+      expect(result).toEqual({ scanning: false });
+    });
+
+    it('reports genuinely running when the container is still going', async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockResolvedValue(JSON.stringify({
+        container: 'sonar-scan-pending',
+        run_id: 'build-232',
+        started_at_epoch_ms: Date.now() - 3 * 60_000,
+      }) as never);
+      mockDockerResponse(200, { State: { Running: true } });
+
+      const result = await service.checkAsyncSonarScan();
+
+      expect(result).toEqual({ scanning: true, phase: 'running', runId: 'build-232', ageMinutes: 3 });
+    });
+
+    it('distinguishes "finished, waiting for a build to harvest it" from genuinely running', async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockResolvedValue(JSON.stringify({
+        container: 'sonar-scan-pending',
+        run_id: 'build-232',
+        started_at_epoch_ms: Date.now() - 6 * 60_000,
+      }) as never);
+      mockDockerResponse(200, { State: { Running: false } });
+
+      const result = await service.checkAsyncSonarScan();
+
+      expect(result).toEqual({ scanning: true, phase: 'finished-pending-harvest', runId: 'build-232', ageMinutes: 6 });
+    });
+
+    it('reports not scanning when the marker points at a container that no longer exists (stale marker)', async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockResolvedValue(JSON.stringify({ container: 'sonar-scan-pending', run_id: 'build-1' }) as never);
+      mockDockerResponse(404, { message: 'No such container' });
+
+      const result = await service.checkAsyncSonarScan();
+
+      expect(result).toEqual({ scanning: false });
+    });
+
+    it('reports not scanning rather than throwing when the Docker socket is unreachable', async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockResolvedValue(JSON.stringify({ container: 'sonar-scan-pending', run_id: 'build-1' }) as never);
+      mockDockerSocketError('connect ENOENT /var/run/docker.sock');
+
+      const result = await service.checkAsyncSonarScan();
+
+      expect(result).toEqual({ scanning: false });
     });
   });
 });

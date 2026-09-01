@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { AiopsOutput, Finding, Cluster, HistoryPoint, Suppression, SourceStatus } from './types';
-import { api, ApiError, type PipelineStatus, type NewSuppression, type AwsStatus, type AppSettings, type DetectedTarget, type SonarQubeStatus } from './api';
+import { api, ApiError, type PipelineStatus, type NewSuppression, type AwsStatus, type AppSettings, type DetectedTarget, type SonarQubeStatus, type AsyncSonarScanStatus } from './api';
 import { healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge } from './lib';
 import './App.css';
 
@@ -137,6 +137,20 @@ export default function App() {
     ? formatElapsed(now - new Date(scan.startedAt).getTime())
     : null;
 
+  // The async SonarQube scan the pipeline launches detached can genuinely
+  // be working with no Jenkins build around to report it via `scan` above
+  // - that gap is real (confirmed live: idle pipeline state, scan
+  // container still running) and is what this polls for independently,
+  // rather than only ever showing SonarQube's progress as part of a
+  // build's own activity.
+  const [asyncSonarScan, setAsyncSonarScan] = useState<AsyncSonarScanStatus | null>(null);
+  useEffect(() => {
+    const poll = () => api.getAsyncSonarScanStatus().then(setAsyncSonarScan).catch(() => {});
+    poll();
+    const timer = setInterval(poll, 20000);
+    return () => clearInterval(timer);
+  }, []);
+
   return (
     <div className="shell">
       <aside className="sidebar">
@@ -228,6 +242,7 @@ export default function App() {
             onReload={load}
             scan={scanInFlight ? scan : null}
             elapsedLabel={elapsedLabel}
+            asyncSonarScan={asyncSonarScan}
           />
         )}
       </main>
@@ -307,9 +322,10 @@ function ScanStalledBanner({ scan }: { scan: PipelineStatus }) {
 
 const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const;
 
-function Content({ view, data, onGoto, onReload, scan, elapsedLabel }: {
+function Content({ view, data, onGoto, onReload, scan, elapsedLabel, asyncSonarScan }: {
   view: View; data: AiopsOutput; onGoto: (v: View) => void; onReload: () => void;
   scan: PipelineStatus | null; elapsedLabel: string | null;
+  asyncSonarScan: AsyncSonarScanStatus | null;
 }) {
   const health = healthLabel(data.health_score);
   const [query, setQuery] = useState('');
@@ -340,7 +356,9 @@ function Content({ view, data, onGoto, onReload, scan, elapsedLabel }: {
             run) made the very first scan look like nothing was happening,
             even though the sidebar's own spinner/elapsed timer confirmed it
             was. Only the per-tool chip row genuinely needs prior data. */}
-        {(data.sources || scan) && <DataSources sources={data.sources ?? []} scan={scan} elapsedLabel={elapsedLabel} />}
+        {(data.sources || scan || asyncSonarScan?.scanning) && (
+          <DataSources sources={data.sources ?? []} scan={scan} elapsedLabel={elapsedLabel} asyncSonarScan={asyncSonarScan} />
+        )}
         <section className="grid">
           <div className={`card health ${health.cls}`}>
             <span className="card-label">Health Score</span>
@@ -973,8 +991,9 @@ const STAGE_TO_SOURCE: Record<string, string> = {
   'AIOps engine & dashboard update': 'aws',
 };
 
-function DataSources({ sources, scan, elapsedLabel }: {
+function DataSources({ sources, scan, elapsedLabel, asyncSonarScan }: {
   sources: SourceStatus[]; scan?: PipelineStatus | null; elapsedLabel?: string | null;
+  asyncSonarScan?: AsyncSonarScanStatus | null;
 }) {
   const missingOrError = sources.filter((s) => s.status !== 'ok');
   // The scanners run as parallel branches (see the Jenkinsfile), so more
@@ -986,8 +1005,34 @@ function DataSources({ sources, scan, elapsedLabel }: {
   // "N scanners in parallel" count above.
   const activeScannerStages = (scan?.activeStages ?? []).filter((s) => s in STAGE_TO_SOURCE);
   const runningSources = new Set(activeScannerStages.map((s) => STAGE_TO_SOURCE[s]));
+  // The async scan can be genuinely working with no build around to have
+  // touched a stage marker at all (see the dedicated banner below) - the
+  // chip should still reflect that.
+  if (asyncSonarScan?.scanning) runningSources.add('sonarqube');
   return (
     <section className="block sources-block">
+      {/* Distinct from the `scan` banner below: a build waiting on this
+          exact scan already shows it via its own currentActivity, but
+          between builds - the whole reason this scan runs detached - there
+          is often no build around to report it at all. Confirmed live:
+          pipeline state "success" (idle) while the scan container was
+          still genuinely running, with nothing on the dashboard saying so. */}
+      {!scan && asyncSonarScan?.scanning && (
+        <div className="scan-progress-row async-sonar-row">
+          <span className="spinner" />
+          <div className="scan-progress-text">
+            <span className="scan-progress-stage">
+              {asyncSonarScan.phase === 'running'
+                ? 'SonarQube is scanning in the background'
+                : 'SonarQube finished scanning - results will be picked up by the next run'}
+            </span>
+            <span className="scan-progress-activity">
+              {asyncSonarScan.runId && `started by ${asyncSonarScan.runId}`}
+              {asyncSonarScan.ageMinutes != null && ` · ${asyncSonarScan.ageMinutes} min so far`}
+            </span>
+          </div>
+        </div>
+      )}
       {scan && (
         <div className="scan-progress-row">
           <span className="spinner" />

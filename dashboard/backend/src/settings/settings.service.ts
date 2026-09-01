@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import * as http from 'http';
 import { PATHS } from '../config/paths';
 
 export interface PipelineSettings {
@@ -214,5 +215,76 @@ export class SettingsService {
       crashReason: 'other',
       message: 'SonarQube was running but is not responding now.',
     };
+  }
+
+  /**
+   * Reports whether the async SonarQube scan the Jenkinsfile launches
+   * (checkPendingSonarScan/kickOffSonarScan) is genuinely running right
+   * now - not just "was launched at some point", which the marker file
+   * alone can't distinguish from "already finished, waiting for a build to
+   * pick it up" or "the container is long gone". Between builds - the
+   * whole reason this scan runs detached in the first place - there is
+   * often no Jenkins build around at all to report this, so it has to be
+   * read directly from the same source Jenkins itself checks: the
+   * container's own live state, over the Docker Engine API.
+   */
+  async checkAsyncSonarScan(): Promise<{
+    scanning: boolean;
+    phase?: 'running' | 'finished-pending-harvest';
+    runId?: string;
+    ageMinutes?: number;
+  }> {
+    const markerFile = join(PATHS.findingsDir, '.sonar-pending.json');
+    if (!existsSync(markerFile)) return { scanning: false };
+
+    let pending: { container?: string; run_id?: string; started_at_epoch_ms?: number };
+    try {
+      pending = JSON.parse(await readFile(markerFile, 'utf-8'));
+    } catch (err) {
+      this.logger.warn(`Could not parse ${markerFile}: ${err}`);
+      return { scanning: false };
+    }
+    if (!pending.container) return { scanning: false };
+
+    const ageMinutes = pending.started_at_epoch_ms
+      ? Math.floor((Date.now() - pending.started_at_epoch_ms) / 60000)
+      : undefined;
+
+    try {
+      const { status, body } = await this.dockerGet(`/containers/${pending.container}/json`);
+      if (status === 404) return { scanning: false }; // stale marker - container already reaped
+      const running = (body as { State?: { Running?: boolean } })?.State?.Running === true;
+      return { scanning: true, phase: running ? 'running' : 'finished-pending-harvest', runId: pending.run_id, ageMinutes };
+    } catch (err) {
+      // Docker socket not reachable (e.g. this deployment doesn't mount
+      // it) - not an error state worth surfacing, just nothing to report.
+      this.logger.warn(`Could not query Docker for the async SonarQube scan's state: ${err}`);
+      return { scanning: false };
+    }
+  }
+
+  /** A minimal GET against the Docker Engine API over its Unix socket - no
+   * docker CLI or client library needed just to read one container's
+   * state. */
+  private dockerGet(path: string): Promise<{ status: number; body: unknown }> {
+    return new Promise((resolve, reject) => {
+      const req = http.request(
+        { socketPath: '/var/run/docker.sock', path, method: 'GET', timeout: 3000 },
+        (res) => {
+          let data = '';
+          res.on('data', (chunk) => (data += chunk));
+          res.on('end', () => {
+            try {
+              resolve({ status: res.statusCode ?? 0, body: data ? JSON.parse(data) : null });
+            } catch (err) {
+              reject(err instanceof Error ? err : new Error(String(err)));
+            }
+          });
+        },
+      );
+      req.on('error', reject);
+      req.on('timeout', () => req.destroy(new Error('Docker socket request timed out')));
+      req.end();
+    });
   }
 }

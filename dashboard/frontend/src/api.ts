@@ -108,6 +108,22 @@ export interface SonarQubeStatus {
   message?: string;
 }
 
+/** The async SonarQube scan the Jenkinsfile launches detached
+ * (checkPendingSonarScan/kickOffSonarScan) can genuinely be scanning with
+ * no Jenkins build around to report it - the whole reason it runs
+ * detached in the first place. This reads its real, current state
+ * directly rather than only ever showing it as part of a build's own
+ * progress. */
+export interface AsyncSonarScanStatus {
+  scanning: boolean;
+  /** 'running': the scanner container is still actively working.
+   * 'finished-pending-harvest': it already exited: a later run's own
+   * catch-up will pick up its results, nothing further to wait on. */
+  phase?: 'running' | 'finished-pending-harvest';
+  runId?: string;
+  ageMinutes?: number;
+}
+
 export interface PipelineStatus {
   state: 'idle' | 'queued' | 'running' | 'success' | 'failed';
   buildNumber?: number;
@@ -128,6 +144,7 @@ export const api = {
     request<AppSettings>('/settings', { method: 'PUT', body: JSON.stringify(body) }),
   detectTarget: () => request<DetectedTarget>('/settings/detect-target'),
   getSonarQubeStatus: () => request<SonarQubeStatus>('/settings/sonarqube-status'),
+  getAsyncSonarScanStatus: () => request<AsyncSonarScanStatus>('/settings/sonarqube-scan-status'),
   getSuppressions: () => request<Suppression[]>('/suppressions'),
   createSuppression: (body: NewSuppression) =>
     request<Suppression>('/suppressions', { method: 'POST', body: JSON.stringify(body) }),

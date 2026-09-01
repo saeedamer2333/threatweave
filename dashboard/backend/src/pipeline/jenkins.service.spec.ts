@@ -578,6 +578,31 @@ describe('JenkinsService', () => {
     expect(status.error).toContain('FAILURE');
   });
 
+  // ---- Regression: confirmed live. NOT_BUILT is the Jenkinsfile's own
+  // intentional result for "no new commits since the last scan, nothing to
+  // do" (Checkout stage's auto-skip) - a routine, expected outcome, not an
+  // error. Before this was classified separately, a plain auto-skip showed
+  // on the dashboard as a red "The last scan attempt failed" banner,
+  // indistinguishable from Jenkins genuinely being broken.
+  it('reports skipped, not failed, when the build result is NOT_BUILT', async () => {
+    fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
+      .mockResolvedValueOnce(NO_CRUMB)
+      .mockResolvedValueOnce(TRIGGERED)
+      .mockResolvedValueOnce(QUEUE_RESOLVED)
+      .mockResolvedValueOnce(textResponse('No new commits since the last scan - skipping this automatic run.\n', { moreData: false }))
+      .mockResolvedValueOnce(jsonResponse({ result: 'NOT_BUILT' }));
+
+    await service.triggerBuild(SETTINGS);
+    await jest.advanceTimersByTimeAsync(2000);
+    await jest.advanceTimersByTimeAsync(3000);
+
+    const status = service.getStatus();
+    expect(status.state).toBe('skipped');
+    expect(status.error).toBeUndefined();
+  });
+
   // ---- Regression: a real incident during development. Jenkins itself was
   // healthy again after a network blip, but the API's own long-lived
   // connection to it kept failing anyway ("fetch failed") - the poll loop

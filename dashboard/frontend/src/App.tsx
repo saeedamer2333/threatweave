@@ -91,7 +91,7 @@ export default function App() {
       try {
         const status = await api.getPipelineStatus();
         setScan(status);
-        if (status.state === 'success' || status.state === 'failed') load();
+        if (status.state === 'success' || status.state === 'skipped' || status.state === 'failed') load();
       } catch {
         // A single failed poll (e.g. the api container restarting) is not a
         // reason to give up forever - that used to stop this interval
@@ -1044,8 +1044,12 @@ function DataSources({ sources, scan, elapsedLabel, asyncSonarScan }: {
   const runningSources = new Set(activeScannerStages.map((s) => STAGE_TO_SOURCE[s]));
   // The async scan can be genuinely working with no build around to have
   // touched a stage marker at all (see the dedicated banner below) - the
-  // chip should still reflect that.
-  if (asyncSonarScan?.scanning) runningSources.add('sonarqube');
+  // chip should still reflect that. Specifically 'running', not just
+  // `scanning` (true for 'finished-pending-harvest' too) - confirmed live,
+  // the chip kept showing "scanning now…" for a container Docker Desktop
+  // already showed as stopped/exited, simply waiting for a later run to
+  // harvest its results, not doing any work any more.
+  if (asyncSonarScan?.phase === 'running') runningSources.add('sonarqube');
   return (
     <section className="block sources-block">
       {/* Distinct from the `scan` banner below: a build waiting on this
@@ -1056,7 +1060,9 @@ function DataSources({ sources, scan, elapsedLabel, asyncSonarScan }: {
           still genuinely running, with nothing on the dashboard saying so. */}
       {!scan && asyncSonarScan?.scanning && (
         <div className="scan-progress-row async-sonar-row">
-          <span className="spinner" />
+          {/* A spinner on "finished scanning" text reads as still working -
+              only genuinely true for 'running'. */}
+          {asyncSonarScan.phase === 'running' && <span className="spinner" />}
           <div className="scan-progress-text">
             <span className="scan-progress-stage">
               {asyncSonarScan.phase === 'running'
@@ -1065,7 +1071,11 @@ function DataSources({ sources, scan, elapsedLabel, asyncSonarScan }: {
             </span>
             <span className="scan-progress-activity">
               {asyncSonarScan.runId && `started by ${asyncSonarScan.runId}`}
-              {asyncSonarScan.ageMinutes != null && ` · ${asyncSonarScan.ageMinutes} min so far`}
+              {asyncSonarScan.ageMinutes != null && (
+                asyncSonarScan.phase === 'running'
+                  ? ` · ${asyncSonarScan.ageMinutes} min so far`
+                  : ` · launched ~${asyncSonarScan.ageMinutes} min ago`
+              )}
             </span>
           </div>
         </div>

@@ -29,6 +29,10 @@ const CONSOLE_POLL_MS = 3_000;
  * scans. */
 const IDLE_RECONCILE_MS = 15_000;
 
+/** States where nothing is actively in flight - safe to reconcile against
+ * Jenkins, and where triggerBuild is allowed to proceed. */
+const SETTLED_STATES = new Set(['idle', 'success', 'skipped', 'failed']);
+
 /** While queued (no build number yet, no console to check), a stall can
  * only be measured by "did Jenkins answer at all" - three minutes of that
  * failing genuinely means something is wrong, since going from queued to
@@ -61,7 +65,13 @@ const RUNNING_STALL_LIMIT_MS = 5 * 60_000;
 const HARD_GIVEUP_MS = 40 * 60_000;
 
 export interface PipelineStatus {
-  state: 'idle' | 'queued' | 'running' | 'success' | 'failed';
+  /** 'skipped' is deliberately its own state, not folded into 'failed' -
+   * NOT_BUILT is the Jenkinsfile's own intentional result for "no new
+   * commits since the last scan, nothing to do" (Checkout stage), not an
+   * error. Confirmed live: before this distinction existed, a routine
+   * auto-skip showed on the dashboard as a red "The last scan attempt
+   * failed" banner, indistinguishable from Jenkins genuinely being broken. */
+  state: 'idle' | 'queued' | 'running' | 'success' | 'skipped' | 'failed';
   buildNumber?: number;
   buildUrl?: string;
   startedAt?: string;
@@ -125,7 +135,7 @@ export class JenkinsService implements OnModuleInit, OnModuleDestroy {
     // fights triggerBuild's own faster (2s) queue poll once a build this
     // service *did* start is actually in flight.
     this.idleReconcileTimer = setInterval(() => {
-      if (this.status.state === 'idle' || this.status.state === 'success' || this.status.state === 'failed') {
+      if (SETTLED_STATES.has(this.status.state)) {
         void this.reconcileWithJenkins().then((attached) => {
           if (!attached) void this.checkJenkinsQueue();
         });
@@ -522,12 +532,14 @@ export class JenkinsService implements OnModuleInit, OnModuleDestroy {
             }
             this.stopPolling();
             this.status = {
-              state: body.result === 'SUCCESS' ? 'success' : 'failed',
+              state: body.result === 'SUCCESS' ? 'success' : body.result === 'NOT_BUILT' ? 'skipped' : 'failed',
               startedAt,
               finishedAt: new Date().toISOString(),
               buildNumber,
               buildUrl,
-              ...(body.result !== 'SUCCESS' ? { error: `Build result: ${body.result ?? 'unknown'}` } : {}),
+              ...(body.result !== 'SUCCESS' && body.result !== 'NOT_BUILT'
+                ? { error: `Build result: ${body.result ?? 'unknown'}` }
+                : {}),
             };
             return;
           }

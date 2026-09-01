@@ -125,7 +125,10 @@ export interface AsyncSonarScanStatus {
 }
 
 export interface PipelineStatus {
-  state: 'idle' | 'queued' | 'running' | 'success' | 'failed';
+  /** 'skipped' is a routine auto-skip (no new commits since the last
+   * scan), not an error - kept distinct from 'failed' so it never renders
+   * as one. */
+  state: 'idle' | 'queued' | 'running' | 'success' | 'skipped' | 'failed';
   buildNumber?: number;
   buildUrl?: string;
   startedAt?: string;

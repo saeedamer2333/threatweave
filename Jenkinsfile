@@ -5,11 +5,12 @@
  * cloud checks, then hands every report to the AIOps engine which
  * deduplicates, scores, correlates and explains them.
  *
- * SonarQube's SAST scan runs asynchronously, detached from the rest of the
- * run rather than blocked on: it is kicked off early each run and its
- * results are picked up by whichever later run finds it finished (see
- * checkPendingSonarScan/kickOffSonarScan) - GitLeaks/Trivy/Checkov and the
- * AIOps engine itself never wait on it.
+ * SonarQube's SAST scan runs as a detached container, launched early each
+ * run rather than inline with the other scanners, so its ~5 minute analysis
+ * can overlap the ~9 minute GitLeaks/Trivy/Checkov phase instead of adding
+ * on top of it. A run that starts while an earlier one's scan is still
+ * going waits for it (see checkPendingSonarScan/kickOffSonarScan) rather
+ * than moving on without this cycle's own SAST results.
  *
  * Scanners run as containers via the mounted Docker socket, so the only
  * tooling this image needs is the Docker CLI and Python.
@@ -168,22 +169,25 @@ def sonarLastGood() { "${FINDINGS_DIR}/sonarqube-last-good.json" }
 
 /**
  * SonarQube's own analysis takes minutes no matter the CPU budget. Blocking
- * a run on it (as this pipeline used to) makes the whole run wait; running
- * it after the fast scanners in the same run instead just adds its full
- * duration on top since nothing overlaps it any more (measured live on this
- * exact target: 10.3min parallel -> 15.2min sequential-after). This pair of
- * functions instead launches it *detached* and never blocks a build on it -
- * by the time the container this reads has actually finished, it is
- * normally the NEXT run picking up the results, not the one that launched
- * it. SAST results are therefore always real findings from an actual
- * completed scan of a real commit, just one run older than the fast
- * scanners' results in the same dashboard update (never a stale on-disk
- * cache silently reused - see the earlier decision against a homegrown
- * "Developer Edition" incremental cache) - a small, honestly-labelled lag
- * in exchange for SonarQube's ~5 minutes overlapping the ~9 minute fast
- * scanner phase of whichever run happens to be executing while it works,
- * recovering the old parallel design's overlap one run later instead of
- * losing it outright.
+ * a run on it inline (running it as an ordinary stage) makes the whole run
+ * wait for it in full every single time; this pair of functions instead
+ * launches it *detached*, as early in a run as possible, so its ~5 minutes
+ * can overlap the ~9 minute GitLeaks/Trivy/Checkov phase of whichever run
+ * happens to be executing while it works - the win only materialises if a
+ * later run is willing to pick up the result rather than wait for its own.
+ *
+ * That is exactly what checkPendingSonarScan does *not* do: a run that
+ * finds an earlier one's scan still going waits for it right here (a
+ * bounded poll loop, not a fire-and-forget check) rather than moving on
+ * with older data and letting the next run after that pick it up. The
+ * overlap with GitLeaks/Trivy/Checkov is preserved (that scan started
+ * before this run's Checkout, so most of its ~5 minutes has typically
+ * already elapsed against the *previous* run's fast-scanner phase by the
+ * time this run's own wait begins) but the "next run picks it up" lag is
+ * not - every run's own dashboard update reflects this cycle's real SAST
+ * results, not last cycle's, and the wait itself is real Jenkins activity
+ * (this build's own currentActivity, visible on the dashboard) rather than
+ * invisible work happening in a container no build is watching.
  */
 def checkPendingSonarScan() {
     // Seed this run with the last successfully-fetched report before doing
@@ -205,43 +209,53 @@ def checkPendingSonarScan() {
     def pending = readJSON file: sonarPendingMarker()
     def container = pending.container
 
-    def state = sh(
-        script: "docker inspect -f '{{.State.Status}}' ${container} 2>/dev/null || echo missing",
-        returnStdout: true,
-    ).trim()
+    // Wait for a scan already in flight to finish, rather than moving on
+    // with whatever last-good data was seeded above and picking this one
+    // up next run - a deliberate choice over the original "never block a
+    // build on it" design: it gives up some of that design's speed
+    // (a build that starts while a scan from the previous cycle is still
+    // running now sits here rather than proceeding immediately) in
+    // exchange for a build never finishing without this cycle's own SAST
+    // results, and for the wait itself being visible - this echo becomes
+    // the polled build's `currentActivity` on the dashboard, so "SonarQube
+    // is still working" is no longer invisible background activity with no
+    // build around to report it, the way a detached container between
+    // builds otherwise would be. Bounded the same way the old design
+    // guarded against a stuck scan: 20 min is generous headroom over the
+    // ~5 min this scan normally takes.
+    def waitedMin = 0
+    while (true) {
+        def state = sh(
+            script: "docker inspect -f '{{.State.Status}}' ${container} 2>/dev/null || echo missing",
+            returnStdout: true,
+        ).trim()
 
-    if (state == 'missing') {
-        echo "WARNING: pending SonarQube container ${container} (from ${pending.run_id}) no longer exists - clearing stale marker."
-        sh "rm -f ${sonarPendingMarker()}"
-        return
-    }
+        if (state == 'missing') {
+            echo "WARNING: pending SonarQube container ${container} (from ${pending.run_id}) no longer exists - clearing stale marker."
+            sh "rm -f ${sonarPendingMarker()}"
+            return
+        }
+        if (state != 'running') {
+            break
+        }
 
-    if (state == 'running') {
         // Long.intdiv() rather than Groovy's own `/` deliberately - `/`
         // between two longs returns a BigDecimal, and BigDecimal.trunc()
         // (used here in an earlier version to print a whole-number minute
         // count) is not a real method - confirmed live, it broke every
         // single run with a MissingMethodException the instant a pending
         // scan was found still running, before any real scanner ever got a
-        // chance to execute. intdiv() returns a plain long, so there is no
-        // decimal to truncate in the first place.
-        def ageMin = (System.currentTimeMillis() - (pending.started_at_epoch_ms as Long)).intdiv(60000)
-        // 20 min is generous headroom over the ~5 min this scan normally
-        // takes - this only fires if something is genuinely stuck, so a
-        // slow-but-healthy run is never mistaken for one.
-        if (ageMin > 20) {
-            echo "WARNING: SonarQube scan from ${pending.run_id} has been running for ${ageMin} min - assuming it is stuck and killing it."
+        // chance to execute.
+        waitedMin = (System.currentTimeMillis() - (pending.started_at_epoch_ms as Long)).intdiv(60000)
+        if (waitedMin > 20) {
+            echo "WARNING: SonarQube scan from ${pending.run_id} has been running for ${waitedMin} min - assuming it is stuck and killing it."
             sh "docker rm -f ${container} 2>/dev/null || true"
             sh "rm -f ${sonarPendingMarker()}"
-        } else {
-            echo "SonarQube scan from ${pending.run_id} is still running (${ageMin} min so far) - will check again next run."
-            // Not overwritten with 'pending' when a last-good report was
-            // already seeded above - the dashboard still has real numbers
-            // to show, they are just not from this run's commit yet.
-            scanStatus['SAST - SonarQube'] = scanStatus['SAST - SonarQube'] ?:
-                "pending (started by ${pending.run_id}, still running, no earlier scan to fall back on)"
+            return
         }
-        return
+
+        echo "Waiting for SonarQube scan from ${pending.run_id} to finish (${waitedMin} min so far)..."
+        sleep(time: 15, unit: 'SECONDS')
     }
 
     def exitCode = sh(script: "docker inspect -f '{{.State.ExitCode}}' ${container}", returnStdout: true).trim()
@@ -460,12 +474,13 @@ pipeline {
 
         /* 2 ----------------------------------------------------------- */
         // Checks whether an async SonarQube scan launched by an earlier run
-        // has finished (and if so, fetches its results into this run), then
-        // launches a fresh one right away if none is currently in flight -
-        // as early as possible in the run, so it has the whole ~9 minute
-        // fast-scanner phase below to work in before this run even ends,
-        // rather than only getting started once that phase is already over.
-        // See checkPendingSonarScan/kickOffSonarScan for the full reasoning.
+        // has finished (waiting for it here if it is still going, rather
+        // than moving on without this run's own SAST results), then
+        // launches a fresh one right away - as early as possible in the
+        // run, so it has the whole ~9 minute fast-scanner phase below to
+        // work in before this run even ends, rather than only getting
+        // started once that phase is already over. See
+        // checkPendingSonarScan/kickOffSonarScan for the full reasoning.
         stage('SAST - SonarQube (async)') {
             when { expression { !skipRun } }
             steps {

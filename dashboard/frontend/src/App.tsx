@@ -103,6 +103,36 @@ export default function App() {
     return () => clearInterval(timer);
   }, [scanInFlight, load]);
 
+  // Discovers a build this dashboard did not itself start - Jenkins' own
+  // cron trigger, or a build kicked off directly in Jenkins' UI - which
+  // the fast poll above can never notice on its own, since it only runs
+  // once `scanInFlight` is already true. Confirmed live: a cron-triggered
+  // build ran to completion while the dashboard sat on "idle, last run
+  // #309" the entire time, "Run scan" still clickable, with no poll of any
+  // kind checking whether that was still accurate. Slower than the fast
+  // poll since idle is the common case; once this finds a build genuinely
+  // in flight, setting `scan` flips `scanInFlight` true and the fast poll
+  // above takes over from there.
+  useEffect(() => {
+    if (scanInFlight) return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const status = await api.getPipelineStatus();
+        if (!cancelled && (status.state === 'queued' || status.state === 'running')) setScan(status);
+      } catch {
+        // Best-effort, same reasoning as the fast poll above.
+      }
+    };
+    // Checked immediately, not only after the first interval tick - a
+    // freshly-loaded page (or one that just finished its own scan) should
+    // not have to wait up to 15s to notice a build that was already
+    // running before it loaded.
+    void check();
+    const timer = setInterval(check, 15000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [scanInFlight]);
+
   // Separate from `error` (which is about *fetching findings* and, for a
   // real failure, blocks the whole page) - a failed trigger here means
   // Jenkins itself couldn't be reached or rejected the request, which has

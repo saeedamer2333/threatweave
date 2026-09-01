@@ -98,6 +98,46 @@ describe('JenkinsService', () => {
     expect(service.getStatus()).toEqual({ state: 'idle' });
   });
 
+  // ---- Regression: confirmed live. reconcileWithJenkins used to run only
+  // at startup (and inside triggerBuild's own narrow edge case), so a build
+  // Jenkins started on its own - its cron trigger, or someone using
+  // Jenkins' own UI directly - was invisible to this service for its
+  // entire duration: the dashboard sat showing "idle, last run #309" the
+  // whole time a real build (#310) ran and finished, "Run scan" still
+  // clickable throughout.
+  it('discovers a build Jenkins started on its own while idle, not just at startup', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      building: false, number: 309, url: 'http://jenkins:8080/job/threatweave-pipeline/309/', timestamp: Date.now(),
+    }));
+    await service.onModuleInit();
+    expect(service.getStatus()).toEqual({ state: 'idle' });
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      building: true, number: 310, url: 'http://jenkins:8080/job/threatweave-pipeline/310/', timestamp: Date.now(),
+    }));
+    await jest.advanceTimersByTimeAsync(15000); // the idle-reconcile tick
+
+    expect(service.getStatus().state).toBe('running');
+    expect(service.getStatus().buildNumber).toBe(310);
+  });
+
+  it('does not reconcile while a build this service is already tracking is in flight', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      building: true, number: 21, url: 'http://jenkins:8080/job/threatweave-pipeline/21/', timestamp: Date.now(),
+    })).mockResolvedValueOnce(textResponse('still going\n', { moreData: true, nextOffset: 20 }));
+    await service.onModuleInit();
+    expect(service.getStatus().state).toBe('running');
+
+    fetchMock.mockClear();
+    await jest.advanceTimersByTimeAsync(15000); // the idle-reconcile tick, if it fired
+
+    // Only the console poll (from pollBuild, already tracking #21) should
+    // have run - a second /lastBuild call here would mean the idle
+    // reconciler fired despite a build already being tracked.
+    const lastBuildCalls = fetchMock.mock.calls.filter(([url]) => (url as string).includes('/lastBuild/'));
+    expect(lastBuildCalls).toHaveLength(0);
+  });
+
   it('stays idle at startup rather than throwing when Jenkins cannot be reached', async () => {
     fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
 

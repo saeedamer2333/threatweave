@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Agent, fetch as undiciFetch, type RequestInit, type Response } from 'undici';
 import { PipelineSettings } from '../settings/settings.service';
 
@@ -21,6 +21,13 @@ const JOB_NAME = 'threatweave-pipeline';
 const POLL_TIMEOUT_MS = 8_000;
 const QUEUE_POLL_MS = 2_000;
 const CONSOLE_POLL_MS = 3_000;
+
+/** How often to check whether Jenkins is running a build this service
+ * doesn't already know about, while otherwise idle. Frequent enough that a
+ * cron-triggered build is reflected on the dashboard within a reasonable
+ * window of it actually starting, without hammering Jenkins between real
+ * scans. */
+const IDLE_RECONCILE_MS = 15_000;
 
 /** While queued (no build number yet, no console to check), a stall can
  * only be measured by "did Jenkins answer at all" - three minutes of that
@@ -84,10 +91,11 @@ export interface PipelineStatus {
 }
 
 @Injectable()
-export class JenkinsService implements OnModuleInit {
+export class JenkinsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(JenkinsService.name);
   private status: PipelineStatus = { state: 'idle' };
   private pollTimer?: ReturnType<typeof setInterval>;
+  private idleReconcileTimer?: ReturnType<typeof setInterval>;
 
   /**
    * Tracking lives only in memory - a redeploy of this container (which
@@ -105,6 +113,26 @@ export class JenkinsService implements OnModuleInit {
     if (attached) {
       this.logger.log(`Resuming tracking of build #${this.status.buildNumber}, already running at startup`);
     }
+
+    // Reconciling only here (and inside triggerBuild's own edge case)
+    // misses every build this service did not itself kick off - confirmed
+    // live: a cron-triggered build ran and finished entirely (skipped, in
+    // that instance, but the same gap applies to a real scan) while the
+    // dashboard sat showing "idle, last run #309" throughout, with nothing
+    // telling a viewer that real Jenkins activity was happening or that
+    // clicking "Run scan" right then would queue a redundant second build
+    // behind it. Only reconciles while genuinely idle, so this never
+    // fights triggerBuild's own faster (2s) queue poll once a build this
+    // service *did* start is actually in flight.
+    this.idleReconcileTimer = setInterval(() => {
+      if (this.status.state === 'idle' || this.status.state === 'success' || this.status.state === 'failed') {
+        void this.reconcileWithJenkins();
+      }
+    }, IDLE_RECONCILE_MS);
+  }
+
+  onModuleDestroy(): void {
+    if (this.idleReconcileTimer) clearInterval(this.idleReconcileTimer);
   }
 
   /**

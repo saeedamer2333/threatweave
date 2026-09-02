@@ -5,6 +5,7 @@ import { SuppressionsController } from './suppressions/suppressions.controller';
 import { SuppressionsService } from './suppressions/suppressions.service';
 import { EngineController } from './engine/engine.controller';
 import { EngineService } from './engine/engine.service';
+import { AwsScheduleService } from './engine/aws-schedule.service';
 import { SettingsController } from './settings/settings.controller';
 import { SettingsService } from './settings/settings.service';
 import { PipelineController } from './pipeline/pipeline.controller';
@@ -22,6 +23,7 @@ import { JenkinsService } from './pipeline/jenkins.service';
     FindingsService,
     SuppressionsService,
     EngineService,
+    AwsScheduleService,
     SettingsService,
     JenkinsService,
   ],

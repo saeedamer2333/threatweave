@@ -425,6 +425,32 @@ describe('JenkinsService', () => {
     expect(service.getStatus().currentStage).toBe('SAST - SonarQube');
   });
 
+  // ---- Regression: confirmed live. The Jenkinsfile's real stage names
+  // contain their own parens - "SAST - SonarQube (async)" and "SAST -
+  // SonarQube (harvest)" - and the marker regex used to stop at the FIRST
+  // `)` it found, truncating the captured name to "SAST - SonarQube
+  // (async" (missing its own closing paren). That name could then never
+  // exactly match STAGE_TO_SOURCE on the frontend, so the SonarQube chip
+  // silently never highlighted as running during either stage.
+  it('captures a stage name in full even when the name itself contains parens', async () => {
+    fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
+      .mockResolvedValueOnce(NO_CRUMB)
+      .mockResolvedValueOnce(TRIGGERED)
+      .mockResolvedValueOnce(QUEUE_RESOLVED)
+      .mockResolvedValueOnce(textResponse(
+        '[Pipeline] { (SAST - SonarQube (harvest))\nWaiting for SonarQube scan to finish\n',
+        { moreData: true, nextOffset: 80 },
+      ));
+
+    await service.triggerBuild(SETTINGS);
+    await jest.advanceTimersByTimeAsync(2000); // -> running
+    await jest.advanceTimersByTimeAsync(3000); // console poll
+
+    expect(service.getStatus().currentStage).toBe('SAST - SonarQube (harvest)');
+  });
+
   // ---- The four scanners now run as parallel branches of one 'Scans'
   // stage (see the Jenkinsfile) rather than as separate sequential stages,
   // so Jenkins tags their console lines with a `[Branch Name]` prefix

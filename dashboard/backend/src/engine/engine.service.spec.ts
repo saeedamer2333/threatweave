@@ -97,6 +97,48 @@ describe('EngineService', () => {
     });
   });
 
+  describe('runAwsMonitor', () => {
+    // ---- Regression: confirmed live. monitor.py's own --output default is
+    // findings/aws-findings.json, one directory above
+    // findings/scan-inputs/ - where the aggregator, and every other
+    // scanner's report, actually lives. Without passing --output
+    // explicitly, every manual "Run cloud scan" wrote its result to a file
+    // the engine never reads, no matter how many times a follow-up rescan
+    // ran afterward.
+    it('passes an explicit --output pointing into scan-inputs/, not monitor.py\'s own default', async () => {
+      const child = fakeChild();
+      mockSpawn.mockReturnValue(child as never);
+
+      const promise = service.runAwsMonitor();
+      child.emit('close', 0);
+      await promise;
+
+      expect(mockSpawn).toHaveBeenCalledWith(
+        'python3',
+        ['/fake/aws_monitor/monitor.py', '--output', join('/fake/findings', 'scan-inputs', 'aws-findings.json')],
+        expect.objectContaining({ cwd: '/fake' }),
+      );
+    });
+
+    it('still appends region and checks when given, after the output path', async () => {
+      const child = fakeChild();
+      mockSpawn.mockReturnValue(child as never);
+
+      const promise = service.runAwsMonitor('eu-west-1', 'ec2,s3');
+      child.emit('close', 0);
+      await promise;
+
+      expect(mockSpawn).toHaveBeenCalledWith(
+        'python3',
+        [
+          '/fake/aws_monitor/monitor.py', '--output', join('/fake/findings', 'scan-inputs', 'aws-findings.json'),
+          '--region', 'eu-west-1', '--checks', 'ec2,s3',
+        ],
+        expect.objectContaining({ cwd: '/fake' }),
+      );
+    });
+  });
+
   describe('getAwsStatus', () => {
     it('runs status_check.py and returns its parsed JSON, including the permission breakdown', async () => {
       const child = fakeChild();

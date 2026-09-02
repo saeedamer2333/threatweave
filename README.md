@@ -7,7 +7,9 @@ Four scanners (SonarQube, Trivy, GitLeaks, Checkov) and a live AWS monitor feed
 a Python engine that deduplicates, scores with a trained model, correlates
 findings **across** code, container and cloud into attack paths, and explains
 each one in plain English. Results are served by a NestJS API and shown on a
-React dashboard.
+React dashboard. Cloud checks run on their own schedule (`scanIntervalMinutes`
+in Settings), independent of code pushes — an AWS misconfiguration made
+directly in the console, with no commit involved, is still caught.
 
 **The contribution:** individually, a vulnerable dependency and an open
 security group are two routine tickets in two different tools. On the same
@@ -114,6 +116,12 @@ What "Run scan" scans is configured in Settings (source directory, IaC
 directory, container image, SonarQube project key) — defaults match what
 was already hardcoded in the Jenkins job, editable without touching Jenkins
 directly.
+
+The moment a triggered run finishes, an auto-dismissing toast reports what
+actually changed — total findings, critical/high split, the health-score
+delta against the previous run, and whether any *new* attack paths were
+found — rather than leaving that to be noticed by reading the updated stat
+cards. It clears itself after a few seconds; no click needed.
 
 **Automatic scanning on push** — scans don't have to be manually triggered.
 Jenkins polls the target every 5 minutes and skips the run entirely when

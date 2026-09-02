@@ -29,10 +29,10 @@ describe('healthLabel', () => {
     expect(healthLabel(0)).toEqual({ text: 'Critical', cls: 'bad' });
   });
 
-  it('matches the real build-9 score (15) as Critical', () => {
+  it('matches the real build-306 score (13) as Critical', () => {
     // Regression anchor: this is the exact score cited throughout the FYP
     // document's Chapter 4 screenshots and captions.
-    expect(healthLabel(15).text).toBe('Critical');
+    expect(healthLabel(13).text).toBe('Critical');
   });
 });
 

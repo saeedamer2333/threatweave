@@ -711,7 +711,14 @@ function allStagesWithPositions(chunk: string): { index: number; name: string; s
   // prefix here, not at every call site, is what lets a plain scanner name
   // match KNOWN_STAGES/STAGE_TO_SOURCE regardless of which of the two forms
   // produced it.
-  const stageMarkers = [...chunk.matchAll(/\[Pipeline]\s*\{\s*\(([^)]+)\)/g)]
+  // Anchored to end-of-line with a greedy `.+` (not `[^)]+`) specifically so
+  // a stage name that itself contains parens - e.g. "SAST - SonarQube
+  // (async)" - captures in full up to its own last `)`, rather than
+  // stopping at the *first* `)` and losing everything from "(async" on.
+  // Confirmed live: the naive `[^)]+` version silently truncated that exact
+  // stage name, which meant it could never match STAGE_TO_SOURCE/
+  // KNOWN_STAGES downstream no matter how those were spelled.
+  const stageMarkers = [...chunk.matchAll(/^\[Pipeline]\s*\{\s*\((.+)\)$/gm)]
     .map((m) => {
       const raw = m[1];
       const isBranch = /^Branch:\s*/.test(raw);

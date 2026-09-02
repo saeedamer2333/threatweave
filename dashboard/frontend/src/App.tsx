@@ -85,13 +85,58 @@ export default function App() {
   // unclicked until that round trip resolves.
   const [starting, setStarting] = useState(false);
   const scanInFlight = starting || scan?.state === 'queued' || scan?.state === 'running';
+
+  // A one-shot "scan finished" toast - separate from the sidebar's own
+  // status text (which just switches back to the static "Run scan" label,
+  // easy to miss if you looked away) and from ScanFailureBanner (which
+  // stays up until dismissed, appropriate for something that needs
+  // attention, not for the common "it worked" case). Set once, right where
+  // scanInFlight is seen transitioning to a finished state, then cleared by
+  // its own timer below - never re-triggered by a page load or the slow
+  // idle-discovery poll finding an already-finished build, only by this
+  // session actually watching one complete.
+  const [scanToast, setScanToast] = useState<ScanToastInfo | null>(null);
   useEffect(() => {
     if (!scanInFlight) return;
+    // Captured once, when this effect starts (i.e. right as the scan
+    // begins) - the "before" snapshot a finished scan's own results get
+    // compared against below, so the toast can say what actually changed
+    // this run (new attack paths, more/fewer findings) rather than just
+    // repeating this run's raw totals with nothing to judge them against.
+    const before = data;
     const timer = setInterval(async () => {
       try {
         const status = await api.getPipelineStatus();
         setScan(status);
-        if (status.state === 'success' || status.state === 'skipped' || status.state === 'failed') load();
+        if (status.state === 'failed') load();
+        if (status.state === 'success') {
+          // Fetched directly (not via `load()`, which is fire-and-forget)
+          // so the toast can be built from the exact same response that
+          // becomes the new `data` - no risk of racing a second, separate
+          // findings fetch and reading back a different run's numbers.
+          try {
+            const fresh = await api.getFindings();
+            setData(fresh);
+            setError(null);
+            setScanToast({
+              state: 'success',
+              buildNumber: status.buildNumber,
+              totalFindings: fresh.summary.after_dedup,
+              critical: fresh.summary.critical,
+              high: fresh.summary.high,
+              healthScore: fresh.health_score,
+              healthDelta: before ? fresh.health_score - before.health_score : null,
+              newClusters: before ? fresh.clusters.length - before.clusters.length : fresh.clusters.length,
+              totalClusters: fresh.clusters.length,
+            });
+          } catch (e) {
+            setError(e as Error);
+          }
+        }
+        if (status.state === 'skipped') {
+          load();
+          setScanToast({ state: 'skipped', buildNumber: status.buildNumber });
+        }
       } catch {
         // A single failed poll (e.g. the api container restarting) is not a
         // reason to give up forever - that used to stop this interval
@@ -101,6 +146,10 @@ export default function App() {
       }
     }, 2000);
     return () => clearInterval(timer);
+    // `data` deliberately excluded - `before` above is meant to freeze at
+    // whatever `data` held when the scan started, not follow later updates
+    // (there are none until this same effect's own setData call anyway).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanInFlight, load]);
 
   // Discovers a build this dashboard did not itself start - Jenkins' own
@@ -167,6 +216,13 @@ export default function App() {
     ? formatElapsed(now - new Date(scan.startedAt).getTime())
     : null;
 
+  // Auto-dismiss - the whole point is that this needs no click to go away.
+  useEffect(() => {
+    if (!scanToast) return;
+    const timer = setTimeout(() => setScanToast(null), 6000);
+    return () => clearTimeout(timer);
+  }, [scanToast]);
+
   // The async SonarQube scan the pipeline launches detached can genuinely
   // be working with no Jenkins build around to report it via `scan` above
   // - that gap is real (confirmed live: idle pipeline state, scan
@@ -183,6 +239,7 @@ export default function App() {
 
   return (
     <div className="shell">
+      {scanToast && <ScanCompleteToast toast={scanToast} onDismiss={() => setScanToast(null)} />}
       <aside className="sidebar">
         <div className="brand">
           <div className="logo">
@@ -276,6 +333,69 @@ export default function App() {
           />
         )}
       </main>
+    </div>
+  );
+}
+
+/** What the toast needs to say something concrete, not just "it worked" -
+ * built from the freshly-fetched findings response plus whatever `data`
+ * held right before this scan started, so `healthDelta`/`newClusters` are
+ * real before/after deltas rather than just this run's raw totals. `null`
+ * deltas (first scan ever, nothing to compare against) render as plain
+ * totals instead of a +/- change - see ScanCompleteToast. */
+type ScanToastInfo =
+  | { state: 'skipped'; buildNumber?: number }
+  | {
+      state: 'success'; buildNumber?: number;
+      totalFindings: number; critical: number; high: number;
+      healthScore: number; healthDelta: number | null;
+      newClusters: number; totalClusters: number;
+    };
+
+/* ---------- Scan finished: a toast, not a banner - it needs no action and
+   should not linger the way ScanFailureBanner deliberately does. Fixed to
+   the viewport so it is visible from whichever nav view the click happened
+   on, not just Overview. */
+function ScanCompleteToast({ toast, onDismiss }: { toast: ScanToastInfo; onDismiss: () => void }) {
+  const success = toast.state === 'success';
+  return (
+    <div className={`scan-toast ${success ? 'scan-toast-ok' : 'scan-toast-skip'}`} role="status">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+        {success ? <path d="M20 6L9 17l-5-5" /> : <path d="M12 8v5M12 16.5v.01M10.3 3.9L2.5 18a1.5 1.5 0 001.3 2.2h16.4a1.5 1.5 0 001.3-2.2L13.7 3.9a1.5 1.5 0 00-2.6 0z" />}
+      </svg>
+      <div className="scan-toast-body">
+        <strong>
+          {success ? 'Scan completed successfully' : 'Scan skipped'}
+          {toast.buildNumber ? <span className="scan-toast-build"> · Build #{toast.buildNumber}</span> : ''}
+        </strong>
+        {success ? (
+          <>
+            <span>
+              {toast.totalFindings} finding{toast.totalFindings === 1 ? '' : 's'}
+              {' '}({toast.critical} critical, {toast.high} high) · Health {toast.healthScore}
+              {toast.healthDelta !== null && toast.healthDelta !== 0 && (
+                <span className={toast.healthDelta > 0 ? 'scan-toast-up' : 'scan-toast-down'}>
+                  {' '}({toast.healthDelta > 0 ? '+' : ''}{toast.healthDelta})
+                </span>
+              )}
+            </span>
+            <span>
+              {toast.newClusters > 0
+                ? <span className="scan-toast-warn">{toast.newClusters} new attack path{toast.newClusters === 1 ? '' : 's'} found</span>
+                : toast.totalClusters > 0
+                  ? `${toast.totalClusters} attack path${toast.totalClusters === 1 ? '' : 's'} correlated, none new this run`
+                  : 'No attack paths correlated this run.'}
+            </span>
+          </>
+        ) : (
+          <span>No new commits since the last scan - nothing to do.</span>
+        )}
+      </div>
+      <button className="scan-toast-close" onClick={onDismiss} aria-label="Dismiss">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M18 6L6 18M6 6l12 12" />
+        </svg>
+      </button>
     </div>
   );
 }
@@ -1015,13 +1135,14 @@ const SOURCE_LABELS: Record<string, string> = {
  * Stages with no direct scanner (Checkout, Docker image build, ...) map to
  * null and are just skipped. */
 const STAGE_TO_SOURCE: Record<string, string> = {
-  // SonarQube's actual multi-minute analysis no longer happens inside a
-  // Jenkins stage at all - it runs as a detached container that outlives
-  // the build that launched it, and a later run's brief "(async)" stage
-  // only checks on it / kicks off the next one (seconds, not minutes). This
-  // chip is therefore rarely seen "running" any more, which is accurate:
-  // most of the time nothing is actively waiting on it.
+  // SonarQube's own multi-minute analysis runs as a detached container, not
+  // inside either Jenkins stage that touches it: "(async)" launches it and
+  // is done in seconds, then it works unattended through the Scans stage
+  // (no chip shown for that span - accurate, nothing is actively waiting on
+  // it yet), then "(harvest)" is where this run actually waits for/collects
+  // its own result, which is why both map here rather than just the first.
   'SAST - SonarQube (async)': 'sonarqube',
+  'SAST - SonarQube (harvest)': 'sonarqube',
   'Secrets - GitLeaks': 'gitleaks',
   'Container - Trivy': 'trivy',
   'IaC - Checkov': 'checkov',

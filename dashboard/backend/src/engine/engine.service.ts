@@ -74,12 +74,24 @@ export class EngineService {
     return this.status;
   }
 
-  /** Run the AWS monitor with the configured region and enabled checks. */
+  /**
+   * Run the AWS monitor with the configured region and enabled checks.
+   *
+   * `--output` is not optional here despite monitor.py having its own
+   * default - that default is `findings/aws-findings.json`, one directory
+   * above `findings/scan-inputs/`, which is where the aggregator (and
+   * every other scanner's report) actually lives. Confirmed live: without
+   * this, every manual "Run cloud scan" ever wrote its result to a
+   * location the engine never reads, no matter how many times "run a full
+   * scan to fold the results in" was followed afterward - a stale
+   * findings/aws-findings.json from an old test sat there while
+   * findings/scan-inputs/aws-findings.json simply never existed.
+   */
   async runAwsMonitor(
     region?: string,
     checks?: string,
   ): Promise<{ ok: boolean; log: string[] }> {
-    const args = [PATHS.awsMonitor];
+    const args = [PATHS.awsMonitor, '--output', join(PATHS.findingsDir, 'scan-inputs', 'aws-findings.json')];
     if (region) args.push('--region', region);
     if (checks) args.push('--checks', checks);
     try {

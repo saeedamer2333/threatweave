@@ -169,25 +169,26 @@ def sonarLastGood() { "${FINDINGS_DIR}/sonarqube-last-good.json" }
 
 /**
  * SonarQube's own analysis takes minutes no matter the CPU budget. Blocking
- * a run on it inline (running it as an ordinary stage) makes the whole run
- * wait for it in full every single time; this pair of functions instead
- * launches it *detached*, as early in a run as possible, so its ~5 minutes
- * can overlap the ~9 minute GitLeaks/Trivy/Checkov phase of whichever run
- * happens to be executing while it works - the win only materialises if a
- * later run is willing to pick up the result rather than wait for its own.
+ * a run on it inline as an ordinary sequential stage would make the whole
+ * run wait for it in full on top of everything else, so kickOffSonarScan
+ * launches it *detached*, as early in the run as possible, and this run
+ * harvests its OWN result later on, after the ~9 minute
+ * GitLeaks/Trivy/Checkov phase - by which point SonarQube's ~5 minutes has
+ * normally already elapsed in the background, so the harvest below usually
+ * finds it already finished rather than actually having to wait. A run's
+ * own dashboard update always reflects its own cycle's real SAST results;
+ * this never hands a scan off to be picked up by a later run instead.
  *
- * That is exactly what checkPendingSonarScan does *not* do: a run that
- * finds an earlier one's scan still going waits for it right here (a
- * bounded poll loop, not a fire-and-forget check) rather than moving on
- * with older data and letting the next run after that pick it up. The
- * overlap with GitLeaks/Trivy/Checkov is preserved (that scan started
- * before this run's Checkout, so most of its ~5 minutes has typically
- * already elapsed against the *previous* run's fast-scanner phase by the
- * time this run's own wait begins) but the "next run picks it up" lag is
- * not - every run's own dashboard update reflects this cycle's real SAST
- * results, not last cycle's, and the wait itself is real Jenkins activity
- * (this build's own currentActivity, visible on the dashboard) rather than
- * invisible work happening in a container no build is watching.
+ * checkPendingSonarScan is called twice per run for exactly this reason:
+ * once near the start (before kickOffSonarScan), purely as crash recovery -
+ * picking up and waiting out a scan left behind by an earlier run that
+ * never got to harvest its own (e.g. Jenkins restarted mid-run) - and once
+ * again near the end, after Scans, to harvest the scan *this run itself*
+ * just launched. Either call is a genuine bounded wait (not a fire-and-
+ * forget check) when it finds something in flight, and that wait is real
+ * Jenkins activity (this build's own currentActivity, visible on the
+ * dashboard) rather than invisible work happening in a container no build
+ * is watching.
  */
 def checkPendingSonarScan() {
     // Seed this run with the last successfully-fetched report before doing
@@ -413,10 +414,8 @@ pipeline {
                     echo "Scan target         : ${params.SOURCE_DIR}"
                     echo "Host target path    : ${hostTargetPath()}"
 
-                    sh """
-                        mkdir -p ${INPUT_DIR}
-                        rm -f ${INPUT_DIR}/*.json || true
-                    """
+                    sh "mkdir -p ${INPUT_DIR}"
+
                     // git refuses to operate on a repo it does not own by
                     // default ("detected dubious ownership") - confirmed
                     // live: the demo target's .git is owned by root (however
@@ -468,19 +467,33 @@ pipeline {
                             sh "echo '${currentHead}' > ${markerFile}"
                         }
                     }
+
+                    // Deliberately wiped only now, after the skip-check above
+                    // has had a chance to set skipRun - not unconditionally at
+                    // the top of this stage. Confirmed live: wiping it first
+                    // meant every skipped cron tick (no new commits) still
+                    // emptied scan-inputs/ as a side effect, with nothing to
+                    // repopulate it since the scan stages themselves never
+                    // ran. That went unnoticed only because the dashboard was
+                    // still serving its cached aiops-output.json from the last
+                    // real run - until anything else re-read scan-inputs/
+                    // directly (e.g. a local re-score), which then saw a
+                    // near-empty directory and overwrote that cached good
+                    // result with a sparse one.
+                    if (!skipRun) {
+                        sh "rm -f ${INPUT_DIR}/*.json || true"
+                    }
                 }
             }
         }
 
         /* 2 ----------------------------------------------------------- */
-        // Checks whether an async SonarQube scan launched by an earlier run
-        // has finished (waiting for it here if it is still going, rather
-        // than moving on without this run's own SAST results), then
-        // launches a fresh one right away - as early as possible in the
-        // run, so it has the whole ~9 minute fast-scanner phase below to
-        // work in before this run even ends, rather than only getting
-        // started once that phase is already over. See
-        // checkPendingSonarScan/kickOffSonarScan for the full reasoning.
+        // Crash-recovery harvest of any scan left behind by an earlier run
+        // (see checkPendingSonarScan), then launches this run's own scan
+        // right away - as early as possible, so it has the whole ~9 minute
+        // fast-scanner phase below to work in before this run needs its
+        // result back. This run's own SAST results are picked up later, in
+        // the "SAST - SonarQube (harvest)" stage after Scans - not here.
         stage('SAST - SonarQube (async)') {
             when { expression { !skipRun } }
             steps {
@@ -619,13 +632,28 @@ pipeline {
             }
         }
 
+        /* 4.5 --------------------------------------------------------- */
+        // Harvests the SonarQube scan *this run itself* launched back in
+        // stage 2, now that Scans (~9 min) has given it time to finish in
+        // the background - see the checkPendingSonarScan doc comment for
+        // why this is a second call to the same function rather than a
+        // separate one. Normally a near-instant no-op wait since the scan
+        // is already done by this point; only genuinely blocks if this
+        // run's target was unusually large or SonarQube itself was slow.
+        stage('SAST - SonarQube (harvest)') {
+            when { expression { !skipRun } }
+            steps {
+                script {
+                    checkPendingSonarScan()
+                }
+            }
+        }
+
         /* 5 ----------------------------------------------------------- */
-        // GitLeaks/Trivy/Checkov are done; SAST for this run is whatever
-        // checkPendingSonarScan (stage 2) managed to catch up on - possibly
-        // fresh results from a scan that finished in the meantime, possibly
-        // nothing new if that scan (or the one launched by this very run) is
-        // still working, in which case the engine works with what it has,
-        // same as any other missing-report scanner.
+        // GitLeaks/Trivy/Checkov and this run's own SonarQube scan (stage
+        // 4.5) are all done by this point, so the engine sees this cycle's
+        // full, real result set - not a mix of fresh fast-scanner data and
+        // a SAST report left over from an earlier cycle.
         stage('AIOps engine & dashboard update') {
             when { expression { !skipRun } }
             steps {

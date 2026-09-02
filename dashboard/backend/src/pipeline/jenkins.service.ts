@@ -107,6 +107,14 @@ export class JenkinsService implements OnModuleInit, OnModuleDestroy {
   private pollTimer?: ReturnType<typeof setInterval>;
   private idleReconcileTimer?: ReturnType<typeof setInterval>;
 
+  /** The highest Jenkins build number this service has ever reported a
+   * result for - see reconcileWithJenkins's "flew by" branch. `null` until
+   * baselined at startup, specifically so that branch never mistakes
+   * "haven't looked yet" for "build #0 was the last one seen" and reports
+   * whatever Jenkins' last build happens to be the moment this service
+   * boots, rather than only genuinely new ones from here on. */
+  private lastReportedBuildNumber: number | null = null;
+
   /**
    * Tracking lives only in memory - a redeploy of this container (which
    * happens on every code change, including to this file) wipes it. Without
@@ -120,7 +128,7 @@ export class JenkinsService implements OnModuleInit, OnModuleDestroy {
    */
   async onModuleInit(): Promise<void> {
     const attached = await this.reconcileWithJenkins();
-    if (attached) {
+    if (attached && this.status.state === 'running') {
       this.logger.log(`Resuming tracking of build #${this.status.buildNumber}, already running at startup`);
     }
 
@@ -155,6 +163,15 @@ export class JenkinsService implements OnModuleInit, OnModuleDestroy {
    * (see the comment there) - both are really the same situation: this
    * service does not know what Jenkins is currently doing and needs to find
    * out, rather than assume idle or assume failure.
+   *
+   * Also catches a build that started AND finished entirely between two
+   * idle-reconcile ticks - confirmed live: a routine auto-skip build
+   * finishes in ~7s, well inside this timer's 15s interval, so "was it ever
+   * seen building" (the check this used to stop at) missed most of them
+   * outright - the dashboard just never showed a skip banner for that
+   * cycle, with nothing wrong logged anywhere to suggest why. Comparing
+   * build numbers instead of relying on catching it mid-flight is what
+   * survives missing the live window - see lastReportedBuildNumber.
    */
   private async reconcileWithJenkins(): Promise<boolean> {
     try {
@@ -163,14 +180,45 @@ export class JenkinsService implements OnModuleInit, OnModuleDestroy {
         await this.drain(res);
         return false;
       }
-      const body = (await res.json()) as { building: boolean; number: number; url: string; timestamp: number };
-      if (!body.building) return false;
+      const body = (await res.json()) as {
+        building: boolean; number: number; url: string; timestamp: number;
+        result?: string | null; duration?: number;
+      };
 
-      const startedAt = new Date(body.timestamp).toISOString();
-      const buildUrl = rebase(body.url);
-      this.status = { state: 'running', startedAt, buildNumber: body.number, buildUrl };
-      this.pollBuild(body.number, buildUrl, startedAt);
-      return true;
+      if (body.building) {
+        const startedAt = new Date(body.timestamp).toISOString();
+        const buildUrl = rebase(body.url);
+        this.status = { state: 'running', startedAt, buildNumber: body.number, buildUrl };
+        this.pollBuild(body.number, buildUrl, startedAt);
+        return true;
+      }
+
+      // First call ever (service just started): baseline silently rather
+      // than treating whatever Jenkins' last build already was as
+      // something that "just happened" the moment this service booted.
+      if (this.lastReportedBuildNumber === null) {
+        this.lastReportedBuildNumber = body.number;
+        return false;
+      }
+
+      if (body.number > this.lastReportedBuildNumber) {
+        const startedAt = new Date(body.timestamp).toISOString();
+        const finishedAt = new Date(body.timestamp + (body.duration ?? 0)).toISOString();
+        this.status = {
+          state: body.result === 'SUCCESS' ? 'success' : body.result === 'NOT_BUILT' ? 'skipped' : 'failed',
+          startedAt,
+          finishedAt,
+          buildNumber: body.number,
+          buildUrl: rebase(body.url),
+          ...(body.result !== 'SUCCESS' && body.result !== 'NOT_BUILT'
+            ? { error: `Build result: ${body.result ?? 'unknown'}` }
+            : {}),
+        };
+        this.lastReportedBuildNumber = body.number;
+        return true;
+      }
+
+      return false;
     } catch (err) {
       this.logger.warn(`Could not check Jenkins' last build: ${(err as Error).message}`);
       return false;
@@ -541,6 +589,9 @@ export class JenkinsService implements OnModuleInit, OnModuleDestroy {
                 ? { error: `Build result: ${body.result ?? 'unknown'}` }
                 : {}),
             };
+            // Keeps reconcileWithJenkins's "flew by" branch from re-reporting
+            // a build this service already tracked and finished itself.
+            this.lastReportedBuildNumber = buildNumber;
             return;
           }
         } else {

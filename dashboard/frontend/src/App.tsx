@@ -86,16 +86,22 @@ export default function App() {
   const [starting, setStarting] = useState(false);
   const scanInFlight = starting || scan?.state === 'queued' || scan?.state === 'running';
 
-  // A one-shot "scan finished" toast - separate from the sidebar's own
-  // status text (which just switches back to the static "Run scan" label,
-  // easy to miss if you looked away) and from ScanFailureBanner (which
-  // stays up until dismissed, appropriate for something that needs
-  // attention, not for the common "it worked" case). Set once, right where
-  // scanInFlight is seen transitioning to a finished state, then cleared by
-  // its own timer below - never re-triggered by a page load or the slow
-  // idle-discovery poll finding an already-finished build, only by this
-  // session actually watching one complete.
-  const [scanToast, setScanToast] = useState<ScanToastInfo | null>(null);
+  // Every scan this session watches finish gets its own dismissible banner,
+  // stacked oldest-first - not one shared slot where a later event (most
+  // commonly the cron auto-poll skipping because nothing changed) silently
+  // overwrites an unread success banner from a scan the analyst triggered
+  // moments earlier. Confirmed live: without this, a manual "Run scan"
+  // success banner was replaced by the very next auto-skip banner before
+  // anyone had a chance to read it. Each stays up until its own x is
+  // clicked, same as ScanFailureBanner - none auto-dismiss.
+  const [scanToasts, setScanToasts] = useState<ToastEntry[]>([]);
+  const pushToast = useCallback((entry: ScanToastInfo & { id: string }) => {
+    setScanToasts((prev) => (prev.some((t) => t.id === entry.id) ? prev : [...prev, entry]));
+  }, []);
+  const dismissToast = useCallback((id: string) => {
+    setScanToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
   useEffect(() => {
     if (!scanInFlight) return;
     // Captured once, when this effect starts (i.e. right as the scan
@@ -118,7 +124,8 @@ export default function App() {
             const fresh = await api.getFindings();
             setData(fresh);
             setError(null);
-            setScanToast({
+            pushToast({
+              id: `success-${status.buildNumber ?? fresh.run_id}`,
               state: 'success',
               buildNumber: status.buildNumber,
               totalFindings: fresh.summary.after_dedup,
@@ -135,7 +142,7 @@ export default function App() {
         }
         if (status.state === 'skipped') {
           load();
-          setScanToast({ state: 'skipped', buildNumber: status.buildNumber });
+          pushToast({ id: `skipped-${status.buildNumber}`, state: 'skipped', buildNumber: status.buildNumber });
         }
       } catch {
         // A single failed poll (e.g. the api container restarting) is not a
@@ -150,7 +157,7 @@ export default function App() {
     // whatever `data` held when the scan started, not follow later updates
     // (there are none until this same effect's own setData call anyway).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scanInFlight, load]);
+  }, [scanInFlight, load, pushToast]);
 
   // Discovers a build this dashboard did not itself start - Jenkins' own
   // cron trigger, or a build kicked off directly in Jenkins' UI - which
@@ -216,13 +223,6 @@ export default function App() {
     ? formatElapsed(now - new Date(scan.startedAt).getTime())
     : null;
 
-  // Auto-dismiss - the whole point is that this needs no click to go away.
-  useEffect(() => {
-    if (!scanToast) return;
-    const timer = setTimeout(() => setScanToast(null), 6000);
-    return () => clearTimeout(timer);
-  }, [scanToast]);
-
   // The async SonarQube scan the pipeline launches detached can genuinely
   // be working with no Jenkins build around to report it via `scan` above
   // - that gap is real (confirmed live: idle pipeline state, scan
@@ -239,7 +239,6 @@ export default function App() {
 
   return (
     <div className="shell">
-      {scanToast && <ScanCompleteToast toast={scanToast} onDismiss={() => setScanToast(null)} />}
       <aside className="sidebar">
         <div className="brand">
           <div className="logo">
@@ -315,6 +314,9 @@ export default function App() {
           </div>
         )}
         {!error && !data && <div className="state">Loading findings…</div>}
+        {scanToasts.map((toast) => (
+          <ScanCompleteToast key={toast.id} toast={toast} onDismiss={() => dismissToast(toast.id)} />
+        ))}
         {scan?.state === 'failed' && (
           <ScanFailureBanner scan={scan} onDismiss={() => setScan(null)} />
         )}
@@ -352,10 +354,18 @@ type ScanToastInfo =
       newClusters: number; totalClusters: number;
     };
 
-/* ---------- Scan finished: a toast, not a banner - it needs no action and
-   should not linger the way ScanFailureBanner deliberately does. Fixed to
-   the viewport so it is visible from whichever nav view the click happened
-   on, not just Overview. */
+/** One stacked banner - `id` is stable per build (`success-<buildNumber>` /
+ * `skipped-<buildNumber>`) so an overlapping poll tick that detects the
+ * same finished build twice (a real, if narrow, race - see the interval
+ * comment above) de-dupes against pushToast's existing-id check instead of
+ * stacking two identical banners for one build. */
+type ToastEntry = ScanToastInfo & { id: string };
+
+/* ---------- Scan finished: an inline banner (same family as
+   ScanFailureBanner/welcome-banner below), not a floating toast - it stays
+   on screen until the analyst dismisses it with the x, rather than
+   auto-clearing after a few seconds and risking being missed entirely if
+   nobody was looking at that exact moment. */
 function ScanCompleteToast({ toast, onDismiss }: { toast: ScanToastInfo; onDismiss: () => void }) {
   const success = toast.state === 'success';
   return (

@@ -137,6 +137,33 @@ describe('JenkinsService', () => {
     expect(service.getStatus().buildNumber).toBe(310);
   });
 
+  // ---- Regression: confirmed live. A routine auto-skip build (Checkout,
+  // then immediately "no new commits") finishes in ~7s - well inside the
+  // 15s idle-reconcile interval - so "was it ever seen building" (what the
+  // discovery test above relies on) is not a reliable way to notice it
+  // happened at all: two consecutive reconcile ticks can both see
+  // building:false with nothing to attach to, and the dashboard never shows
+  // anything for that cycle even though a real build ran and finished.
+  // reconcileWithJenkins must also notice via the build *number* advancing,
+  // not only by catching a build mid-flight.
+  it('notices a build that started and finished entirely between two idle-reconcile ticks', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      building: false, number: 366, url: 'http://jenkins:8080/job/threatweave-pipeline/366/', timestamp: Date.now(),
+    }));
+    await service.onModuleInit();
+    expect(service.getStatus()).toEqual({ state: 'idle' });
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      building: false, number: 367, result: 'NOT_BUILT',
+      url: 'http://jenkins:8080/job/threatweave-pipeline/367/',
+      timestamp: Date.now(), duration: 6800,
+    }));
+    await jest.advanceTimersByTimeAsync(15000); // the idle-reconcile tick
+
+    expect(service.getStatus().state).toBe('skipped');
+    expect(service.getStatus().buildNumber).toBe(367);
+  });
+
   it('does not reconcile while a build this service is already tracking is in flight', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({
       building: true, number: 21, url: 'http://jenkins:8080/job/threatweave-pipeline/21/', timestamp: Date.now(),
@@ -283,7 +310,13 @@ describe('JenkinsService', () => {
       .mockResolvedValueOnce(EMPTY_QUEUE)
       .mockResolvedValueOnce(NO_CRUMB)
       .mockResolvedValueOnce({ ok: true, headers: new Headers() } as Response) // 200, no Location
-      .mockResolvedValueOnce(jsonResponse({ building: false, number: 44, url: '', timestamp: Date.now() }));
+      // Same build number as NOT_BUILDING's leading mock (6), not a
+      // different/higher one - this test means "genuinely nothing new
+      // happened", which reconcileWithJenkins's own build-number comparison
+      // (see its "flew by" branch) would otherwise read as a build that
+      // started and finished between the two reconcile calls in this test
+      // and report its result instead of the location-header failure below.
+      .mockResolvedValueOnce(jsonResponse({ building: false, number: 6, url: '', timestamp: Date.now() }));
 
     const status = await service.triggerBuild(SETTINGS);
 

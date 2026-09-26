@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type { AiopsOutput, Finding, Cluster, HistoryPoint, Suppression, SourceStatus } from './types';
 import { api, ApiError, type PipelineStatus, type NewSuppression, type AwsStatus, type AppSettings, type DetectedTarget, type SonarQubeStatus, type AsyncSonarScanStatus } from './api';
-import { healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge } from './lib';
+import { healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge, READONLY_POLICY_JSON } from './lib';
 import './App.css';
 
 type View = 'overview' | 'findings' | 'clusters' | 'history' | 'settings';
@@ -729,6 +729,139 @@ const CHECK_LABELS: Record<string, string> = {
   iam: 'IAM — AdministratorAccess, excess access keys',
 };
 
+/** Step-by-step setup for read-only AWS access, shown open whenever the
+ * connection is missing or incomplete. */
+function AwsPolicyGuide({ open }: { open: boolean }) {
+  const [copyNote, setCopyNote] = useState<string | null>(null);
+  const copyPolicy = async () => {
+    try {
+      await navigator.clipboard.writeText(READONLY_POLICY_JSON);
+      setCopyNote('Copied');
+    } catch {
+      setCopyNote('Copy blocked - select the text below instead');
+    }
+    setTimeout(() => setCopyNote(null), 2500);
+  };
+  return (
+    <details className="aws-guide" open={open}>
+      <summary>How to give ThreatWeave read-only AWS access</summary>
+      <ol className="aws-steps">
+        <li>
+          <strong>Create a dedicated IAM user.</strong> AWS Console → IAM → Users → Create user,
+          for example <code>threatweave-monitor</code>. Leave console access off.
+        </li>
+        <li>
+          <strong>Attach a read-only policy.</strong> Choose <em>Attach policies directly</em> and select the
+          AWS managed <code>SecurityAudit</code> policy. For the smallest possible access, create a
+          policy from the JSON below instead and attach that.
+        </li>
+        <li>
+          <strong>Create an access key.</strong> Open the user → <em>Security credentials</em> →
+          <em> Create access key</em> → <em>Application running outside AWS</em>. Copy the access key ID and
+          the secret; AWS shows the secret only once.
+        </li>
+        <li>
+          <strong>Give the keys to ThreatWeave.</strong> Recommended: run <code>aws configure</code> on this
+          machine, so the keys stay in <code>~/.aws</code> and pipeline runs use them too. Or enter them in
+          the form above for this session only.
+        </li>
+        <li>
+          <strong>Check.</strong> The status above should turn green with ✓ EC2 ✓ S3 ✓ IAM.
+        </li>
+      </ol>
+      <div className="aws-policy">
+        <div className="aws-policy-head">
+          <span>Minimum policy: exactly the calls the monitor makes</span>
+          <button type="button" className="btn-ghost small" onClick={copyPolicy}>{copyNote ?? 'Copy JSON'}</button>
+        </div>
+        <pre className="mono">{READONLY_POLICY_JSON}</pre>
+      </div>
+      <p className="set-note">
+        Never use root account keys or a user with <code>AdministratorAccess</code>. ThreatWeave only reads, so
+        its credentials should only be able to read.
+      </p>
+    </details>
+  );
+}
+
+/** Enter AWS keys for this session when no default credentials exist. The
+ * API checks them with AWS before keeping them and never sends them back. */
+function AwsKeyForm({ onConnected }: { onConnected: (s: AwsStatus) => void }) {
+  const empty = { accessKeyId: '', secretAccessKey: '', sessionToken: '', region: '' };
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState(empty);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!open) {
+    return (
+      <button type="button" className="btn-ghost" onClick={() => setOpen(true)}>
+        Enter access keys manually
+      </button>
+    );
+  }
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const status = await api.connectAws({
+        accessKeyId: form.accessKeyId.trim(),
+        secretAccessKey: form.secretAccessKey.trim(),
+        ...(form.sessionToken.trim() ? { sessionToken: form.sessionToken.trim() } : {}),
+        ...(form.region ? { region: form.region } : {}),
+      });
+      setForm(empty);
+      setOpen(false);
+      onConnected(status);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form className="aws-key-form" onSubmit={submit} autoComplete="off">
+      <label className="set-row" htmlFor="aws-key-id">
+        <span className="set-label">Access key ID</span>
+        <input id="aws-key-id" className="set-input mono" placeholder="AKIA…" spellCheck={false} required
+          value={form.accessKeyId} onChange={(e) => setForm({ ...form, accessKeyId: e.target.value })} />
+      </label>
+      <label className="set-row" htmlFor="aws-secret">
+        <span className="set-label">Secret access key</span>
+        <input id="aws-secret" type="password" className="set-input mono" autoComplete="new-password" required
+          value={form.secretAccessKey} onChange={(e) => setForm({ ...form, secretAccessKey: e.target.value })} />
+      </label>
+      <label className="set-row" htmlFor="aws-token">
+        <span className="set-label">Session token <span className="muted-inline">(temporary keys only)</span></span>
+        <input id="aws-token" type="password" className="set-input mono" autoComplete="off"
+          value={form.sessionToken} onChange={(e) => setForm({ ...form, sessionToken: e.target.value })} />
+      </label>
+      <label className="set-row" htmlFor="aws-region">
+        <span className="set-label">Default region</span>
+        <select id="aws-region" className="set-input" value={form.region}
+          onChange={(e) => setForm({ ...form, region: e.target.value })}>
+          {REGIONS.map((r) => <option key={r} value={r}>{r || 'Not set'}</option>)}
+        </select>
+      </label>
+      <p className="set-note">
+        Checked with AWS before use, then held in the API's memory for this session only: never saved to disk,
+        never shown again. Cleared when the API restarts or you disconnect. After each pipeline run the cloud
+        checks are re-run with these keys, since Jenkins cannot see them.
+      </p>
+      {error && <p className="set-note set-note-warn">{error}</p>}
+      <div className="form-actions">
+        <button type="submit" className="btn-primary" disabled={busy}>{busy ? 'Checking with AWS…' : 'Connect'}</button>
+        <button type="button" className="btn-ghost" disabled={busy} onClick={() => { setOpen(false); setError(null); setForm(empty); }}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function SettingsPanel({ data, onReload }: { data: AiopsOutput; onReload: () => void }) {
   const [aws, setAws] = useState<AwsStatus | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -780,6 +913,15 @@ function SettingsPanel({ data, onReload }: { data: AiopsOutput; onReload: () => 
       setMsg((e as Error).message);
     } finally {
       setScanning(false);
+    }
+  };
+
+  const disconnectAws = async () => {
+    setMsg(null);
+    try {
+      setAws(await api.disconnectAws());
+    } catch (e) {
+      setMsg((e as Error).message);
     }
   };
 
@@ -837,6 +979,17 @@ function SettingsPanel({ data, onReload }: { data: AiopsOutput; onReload: () => 
             {describeAwsAuthMethod(aws.arn) && (
               <div className="d-item"><span className="d-label">Auth method</span><span className="d-value">{describeAwsAuthMethod(aws.arn)}</span></div>
             )}
+            <div className="d-item">
+              <span className="d-label">Credentials</span>
+              <span className="d-value">
+                {aws.credentialSource === 'manual' ? (
+                  <>
+                    Entered on this page (this session only){' '}
+                    <button type="button" className="btn-ghost small" onClick={disconnectAws}>Disconnect</button>
+                  </>
+                ) : 'Default chain: IAM role, environment, or ~/.aws/credentials'}
+              </span>
+            </div>
             {aws.permissions && (
               <div className="d-item">
                 <span className="d-label">Read access</span>
@@ -853,12 +1006,15 @@ function SettingsPanel({ data, onReload }: { data: AiopsOutput; onReload: () => 
         ) : (
           <div className="conn-help">
             <p>{aws?.message ?? 'Checking…'}</p>
-            {aws?.messageKind !== 'deployment' && (
-              <p className="empty-sub">
-                Credentials are resolved by Boto3: an IAM role when running on EC2, then environment
-                variables, then <code>~/.aws/credentials</code>. Run <code>aws configure</code> once
-                and reload — nothing needs to be entered here.
-              </p>
+            {aws && aws.messageKind !== 'deployment' && (
+              <>
+                <p className="empty-sub">
+                  Credentials are resolved by Boto3: an IAM role when running on EC2, then environment
+                  variables, then <code>~/.aws/credentials</code>. Run <code>aws configure</code> once and
+                  reload, or enter access keys here for this session.
+                </p>
+                <AwsKeyForm onConnected={setAws} />
+              </>
             )}
           </div>
         )}
@@ -868,7 +1024,8 @@ function SettingsPanel({ data, onReload }: { data: AiopsOutput; onReload: () => 
             Connected, but missing read access for{' '}
             {Object.entries(aws.permissions ?? {}).filter(([, ok]) => !ok).map(([s]) => s.toUpperCase()).join(', ')}
             {' '}— the cloud scan will run but findings from those services will be incomplete. Attach the
-            AWS managed <code>SecurityAudit</code> policy to the credentials shown above and reload.
+            AWS managed <code>SecurityAudit</code> policy (or the minimum policy in the guide below) to the
+            credentials shown above and reload.
           </p>
         )}
 
@@ -876,6 +1033,10 @@ function SettingsPanel({ data, onReload }: { data: AiopsOutput; onReload: () => 
           Only read-only permissions are needed. Attach the AWS managed <code>SecurityAudit</code> policy —
           the monitor issues describe/list/get calls only and cannot modify infrastructure.
         </p>
+
+        {aws && aws.messageKind !== 'deployment' && (
+          <AwsPolicyGuide open={!aws.connected || aws.hasFullAccess === false} />
+        )}
       </div>
 
       {/* Scan configuration */}

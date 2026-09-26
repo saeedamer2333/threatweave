@@ -1,6 +1,7 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { EngineService } from './engine.service';
 import { SettingsService } from '../settings/settings.service';
+import { JenkinsService } from '../pipeline/jenkins.service';
 
 /** How often to check whether an interval AWS scan is due. Deliberately
  * much finer-grained than any realistic scanIntervalMinutes value (the
@@ -33,10 +34,13 @@ export class AwsScheduleService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AwsScheduleService.name);
   private timer?: ReturnType<typeof setInterval>;
   private lastRunAt = 0;
+  /** Highest successful pipeline build already refreshed with session keys. */
+  private lastRefreshedBuild?: number;
 
   constructor(
     private readonly engine: EngineService,
     private readonly settings: SettingsService,
+    @Optional() private readonly jenkins?: JenkinsService,
   ) {}
 
   onModuleInit(): void {
@@ -52,8 +56,38 @@ export class AwsScheduleService implements OnModuleInit, OnModuleDestroy {
     if (this.timer) clearInterval(this.timer);
   }
 
+  /**
+   * Keys typed on the Settings page live only in this API process, so the
+   * AWS monitor inside a Jenkins run cannot use them - and Checkout clears
+   * the previous aws-findings.json. When session keys are active and a new
+   * pipeline build has succeeded, re-run the cloud checks here with those
+   * keys and fold them in, so the run's AWS results are not lost.
+   */
+  private async refreshAfterPipeline(): Promise<boolean> {
+    if (!this.jenkins || !this.engine.hasManualAwsCredentials()) return false;
+    const status = this.jenkins.getStatus();
+    if (status.state !== 'success' || status.buildNumber === undefined) return false;
+    if (this.lastRefreshedBuild !== undefined && status.buildNumber <= this.lastRefreshedBuild) return false;
+    if (this.engine.getStatus().state === 'running') return false;
+
+    this.lastRefreshedBuild = status.buildNumber;
+    const { awsRegion } = await this.settings.get();
+    const checks = await this.settings.enabledChecks();
+    const result = await this.engine.runAwsMonitor(awsRegion || undefined, checks || undefined);
+    if (!result.ok) {
+      this.logger.warn(`AWS refresh after build #${status.buildNumber} failed: ${result.log.join(' | ')}`);
+      return false;
+    }
+    this.engine.startScan();
+    return true;
+  }
+
   private async tick(): Promise<void> {
     try {
+      if (await this.refreshAfterPipeline()) {
+        this.lastRunAt = Date.now();
+        return;
+      }
       const { scanIntervalMinutes, awsRegion } = await this.settings.get();
       // 0 (or anything non-positive) disables the schedule, as already
       // documented on the field itself.

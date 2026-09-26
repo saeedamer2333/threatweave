@@ -118,6 +118,36 @@ export function describeAwsAuthMethod(arn: string | undefined): string | null {
   return null;
 }
 
+/** The smallest IAM policy the AWS monitor can run under: exactly the
+ * read-only calls aws_monitor/monitor.py makes (EC2 instances and security
+ * groups, S3 public access block and encryption, IAM roles/users/keys).
+ * sts:GetCallerIdentity needs no permission, so it is not listed. The AWS
+ * managed SecurityAudit policy is a broader read-only alternative. */
+export const READONLY_POLICY = {
+  Version: '2012-10-17',
+  Statement: [
+    {
+      Sid: 'ThreatWeaveReadOnly',
+      Effect: 'Allow',
+      Action: [
+        'ec2:DescribeInstances',
+        'ec2:DescribeSecurityGroups',
+        's3:ListAllMyBuckets',
+        's3:GetBucketPublicAccessBlock',
+        's3:GetEncryptionConfiguration',
+        'iam:ListRoles',
+        'iam:ListAttachedRolePolicies',
+        'iam:ListUsers',
+        'iam:ListAttachedUserPolicies',
+        'iam:ListAccessKeys',
+      ],
+      Resource: '*',
+    },
+  ],
+};
+
+export const READONLY_POLICY_JSON = JSON.stringify(READONLY_POLICY, null, 2);
+
 /** How long a finding has been open, from its stable first_seen date (not
  * its per-run `id`, which is a fresh UUID every scan and can't answer this).
  * "New" on the very run it was first detected (first_seen === last_seen),

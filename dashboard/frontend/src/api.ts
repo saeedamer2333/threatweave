@@ -54,6 +54,16 @@ export interface AwsStatus {
    * working" - this can. */
   permissions?: { ec2: boolean; s3: boolean; iam: boolean };
   hasFullAccess?: boolean;
+  /** 'manual' while keys typed on the Settings page are in use (held in the
+   * API's memory for this session only); 'default' for Boto3's own chain. */
+  credentialSource?: 'manual' | 'default';
+}
+
+export interface ManualAwsCredentials {
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken?: string;
+  region?: string;
 }
 
 export interface ScanStatus {
@@ -158,6 +168,9 @@ export const api = {
   runPipeline: () => request<PipelineStatus>('/pipeline/run', { method: 'POST' }),
   getPipelineStatus: () => request<PipelineStatus>('/pipeline/status'),
   getAwsStatus: () => request<AwsStatus>('/aws/status'),
+  connectAws: (creds: ManualAwsCredentials) =>
+    request<AwsStatus>('/aws/credentials', { method: 'POST', body: JSON.stringify(creds) }),
+  disconnectAws: () => request<AwsStatus>('/aws/credentials', { method: 'DELETE' }),
   runAwsScan: (region?: string) =>
     request<{ ok: boolean; log: string[] }>('/aws/scan', {
       method: 'POST',

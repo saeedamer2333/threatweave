@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
-import { EngineService } from './engine.service';
+import { BadRequestException, Body, Controller, Delete, Get, Post } from '@nestjs/common';
+import { EngineService, ManualAwsCredentials, validateManualAwsCredentials } from './engine.service';
 import { SettingsService } from '../settings/settings.service';
 
 @Controller()
@@ -24,6 +24,28 @@ export class EngineController {
   @Get('aws/status')
   awsStatus() {
     return this.engine.getAwsStatus();
+  }
+
+  /**
+   * Use keys typed on the Settings page for this session. Kept only if AWS
+   * accepts them; the response is the resulting connection status (never
+   * the keys themselves).
+   */
+  @Post('aws/credentials')
+  async connectAws(@Body() body: Partial<ManualAwsCredentials>) {
+    const problem = validateManualAwsCredentials(body ?? {});
+    if (problem) throw new BadRequestException(problem);
+    const status = await this.engine.connectManualAws(body as ManualAwsCredentials);
+    if (!status.connected) {
+      throw new BadRequestException(`AWS rejected these keys: ${status.message ?? 'unknown error'}`);
+    }
+    return status;
+  }
+
+  /** Forget the session keys and fall back to the default credential chain. */
+  @Delete('aws/credentials')
+  disconnectAws() {
+    return this.engine.disconnectManualAws();
   }
 
   /** Run the cloud checks now, honouring the saved region and check toggles. */

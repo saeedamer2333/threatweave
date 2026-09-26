@@ -597,6 +597,44 @@ describe('JenkinsService', () => {
   // "Branch: SAST - SonarQube" and silently fail to match STAGE_TO_SOURCE on
   // the frontend, leaving every chip un-highlighted despite a real scanner
   // genuinely running.
+  // ---- Regression: confirmed live against build #1164. progressiveText
+  // glues an invisible ConsoleNote blob to the front of every
+  // `[Pipeline] ...` line, with no space. Stage markers were matched on the
+  // raw text, so `^\[Pipeline]` never matched and no scanner chip ever
+  // lit up; and the greedy blob cleaner also ate the `[Pipeline]` after it,
+  // leaving the status line showing a bare "}" or "+ set +x".
+  it('detects parallel scanner stages when each marker carries a ConsoleNote prefix, as real Jenkins output does', async () => {
+    const note = (id: string) => `\x1b[8mha:////${id}AAAAqB+LCAAAAAAAAP9tjTEOwjAUQ3==\x1b[0m`;
+    fetchMock
+      .mockResolvedValueOnce(NOT_BUILDING)
+      .mockResolvedValueOnce(EMPTY_QUEUE)
+      .mockResolvedValueOnce(NO_CRUMB)
+      .mockResolvedValueOnce(TRIGGERED)
+      .mockResolvedValueOnce(QUEUE_RESOLVED)
+      .mockResolvedValueOnce(textResponse(
+        `${note('A1')}[Pipeline] { (Scans)\n` +
+        `${note('B2')}[Pipeline] parallel\n` +
+        `${note('C3')}[Pipeline] { (Branch: Secrets - GitLeaks)\n` +
+        `${note('D4')}[Pipeline] { (Branch: Container - Trivy)\n` +
+        `${note('E5')}[Pipeline] { (Branch: IaC - Checkov)\n` +
+        '[2026-09-26T14:12:30.086Z] GitLeaks: incremental scan since a520e158\n' +
+        '[2026-09-26T14:12:31.000Z] + set +x\n' +
+        `${note('F6')}[Pipeline] }\n`,
+        { moreData: true, nextOffset: 400 },
+      ));
+
+    await service.triggerBuild(SETTINGS);
+    await jest.advanceTimersByTimeAsync(2000);
+    await jest.advanceTimersByTimeAsync(3000);
+
+    const status = service.getStatus();
+    expect(status.activeStages).toEqual(
+      expect.arrayContaining(['Secrets - GitLeaks', 'Container - Trivy', 'IaC - Checkov']),
+    );
+    expect(status.currentStage).toBe('IaC - Checkov');
+    expect(status.currentActivity).toBe('GitLeaks: incremental scan since a520e158');
+  });
+
   it('strips the "Branch: " prefix Jenkins adds to parallel-step stage markers', async () => {
     fetchMock
       .mockResolvedValueOnce(NOT_BUILDING)

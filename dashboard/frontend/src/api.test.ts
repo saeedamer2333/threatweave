@@ -87,6 +87,36 @@ describe('api', () => {
     }));
   });
 
+  it('connectAws POSTs the entered keys to /api/aws/credentials', async () => {
+    const fetchMock = mockFetchOnce(200, { connected: true, credentialSource: 'manual' });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const creds = { accessKeyId: 'AKIAABCDEFGHIJKLMNOP', secretAccessKey: 'a'.repeat(40), region: 'ap-southeast-1' };
+    const result = await api.connectAws(creds);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/aws/credentials', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify(creds),
+    }));
+    expect(result.credentialSource).toBe('manual');
+  });
+
+  it('connectAws surfaces the server\'s reason when AWS rejects the keys', async () => {
+    globalThis.fetch = mockFetchOnce(400, { message: 'AWS rejected these keys: InvalidClientTokenId' }) as unknown as typeof fetch;
+
+    await expect(api.connectAws({ accessKeyId: 'AKIAABCDEFGHIJKLMNOP', secretAccessKey: 'a'.repeat(40) }))
+      .rejects.toThrow('AWS rejected these keys: InvalidClientTokenId');
+  });
+
+  it('disconnectAws sends a DELETE to /api/aws/credentials', async () => {
+    const fetchMock = mockFetchOnce(200, { connected: false, credentialSource: 'default' });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await api.disconnectAws();
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/aws/credentials', expect.objectContaining({ method: 'DELETE' }));
+  });
+
   it('runPipeline sends a POST to /api/pipeline/run', async () => {
     const fetchMock = mockFetchOnce(200, { state: 'queued' });
     globalThis.fetch = fetchMock as unknown as typeof fetch;

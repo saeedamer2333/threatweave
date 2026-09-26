@@ -693,7 +693,12 @@ function describeCause(err: unknown): string {
  * (`[8mha://///4A1C/AEGgMlM2y2Nxw...`) when picked up as plain text the
  * way this poll does. `ha:` is ConsoleNote's own fixed preamble, unique
  * enough to not risk matching any real scanner/shell output. */
-const JENKINS_CONSOLE_NOTE = /\x1b?\[8mha:\S*(\x1b?\[0?m)?/g;
+// The payload is base64 only, so the match stops exactly at its closing
+// `ESC[0m`. A greedy `\S*` here (the previous version) also swallowed the
+// text glued straight after the blob - Jenkins emits every
+// `[Pipeline] { (Stage)` marker as `<blob>[Pipeline] ...` with no space, so
+// cleaning ate the `[Pipeline]` itself (the dashboard showed a bare "}").
+const JENKINS_CONSOLE_NOTE = /\x1b?\[8mha:[A-Za-z0-9+/=]*(\x1b?\[0?m)?/g;
 
 /** Real ANSI CSI escape sequences (colour codes, cursor moves, ...) that a
  * scanner's own coloured output can legitimately contain - stripped so a
@@ -717,7 +722,9 @@ function latestLine(chunk: string): string | null {
   for (let i = lines.length - 1; i >= 0; i--) {
     const withoutTimestamp = lines[i].replace(/^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z]\s*/, '');
     const cleaned = cleanConsoleLine(withoutTimestamp);
-    if (cleaned) {
+    // Jenkins' own step bookkeeping ("[Pipeline] }", "[Pipeline] sh") and
+    // the shell's trace toggles say nothing about what the build is doing.
+    if (cleaned && !cleaned.startsWith('[Pipeline]') && !/^\+ set [+-]x$/.test(cleaned)) {
       return cleaned.length > 160 ? `${cleaned.slice(0, 160)}…` : cleaned;
     }
   }
@@ -769,6 +776,10 @@ function allStagesWithPositions(chunk: string): { index: number; name: string; s
   // Confirmed live: the naive `[^)]+` version silently truncated that exact
   // stage name, which meant it could never match STAGE_TO_SOURCE/
   // KNOWN_STAGES downstream no matter how those were spelled.
+  // progressiveText prefixes every `[Pipeline] ...` line with an invisible
+  // ConsoleNote blob, so markers are matched on cleaned lines - matched raw,
+  // the `^\[Pipeline]` anchor never hit and no scanner ever showed as active.
+  chunk = chunk.split(/\r?\n/).map(cleanConsoleLine).join('\n');
   const stageMarkers = [...chunk.matchAll(/^\[Pipeline]\s*\{\s*\((.+)\)$/gm)]
     .map((m) => {
       const raw = m[1];

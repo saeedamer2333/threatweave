@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge } from './lib';
+import { healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge, READONLY_POLICY, READONLY_POLICY_JSON } from './lib';
 import type { Finding } from './types';
 
 function finding(overrides: Partial<Finding> = {}): Finding {
@@ -119,6 +119,26 @@ describe('filterFindings', () => {
 
   it('treats a blank query as no filter', () => {
     expect(filterFindings(findings, { query: '   ' })).toHaveLength(3);
+  });
+});
+
+describe('READONLY_POLICY', () => {
+  const actions = READONLY_POLICY.Statement[0].Action;
+
+  it('grants exactly the read calls aws_monitor/monitor.py makes', () => {
+    expect([...actions].sort()).toEqual([
+      'ec2:DescribeInstances', 'ec2:DescribeSecurityGroups',
+      'iam:ListAccessKeys', 'iam:ListAttachedRolePolicies', 'iam:ListAttachedUserPolicies', 'iam:ListRoles', 'iam:ListUsers',
+      's3:GetBucketPublicAccessBlock', 's3:GetEncryptionConfiguration', 's3:ListAllMyBuckets',
+    ]);
+  });
+
+  it('never grants a write action', () => {
+    expect(actions.every((a) => /:(Describe|List|Get)/.test(a))).toBe(true);
+  });
+
+  it('is valid JSON when copied', () => {
+    expect(JSON.parse(READONLY_POLICY_JSON)).toEqual(READONLY_POLICY);
   });
 });
 

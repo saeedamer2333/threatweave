@@ -89,6 +89,45 @@ describe('AwsScheduleService', () => {
     expect(engine.startScan).not.toHaveBeenCalled();
   });
 
+  describe('after a pipeline run, with keys entered on the Settings page', () => {
+    let jenkins: { getStatus: jest.Mock };
+
+    function withJenkins(manualKeys: boolean) {
+      (engine as unknown as { hasManualAwsCredentials: jest.Mock }).hasManualAwsCredentials = jest.fn().mockReturnValue(manualKeys);
+      jenkins = { getStatus: jest.fn().mockReturnValue({ state: 'success', buildNumber: 42 }) };
+      service = new AwsScheduleService(
+        engine as unknown as EngineService,
+        settings as unknown as SettingsService,
+        jenkins as never,
+      );
+    }
+
+    it('re-runs the cloud checks with those keys and folds them in, since Jenkins cannot see them', async () => {
+      withJenkins(true);
+      service.onModuleInit();
+      await jest.advanceTimersByTimeAsync(60_000);
+
+      expect(engine.runAwsMonitor).toHaveBeenCalledTimes(1);
+      expect(engine.startScan).toHaveBeenCalledTimes(1);
+    });
+
+    it('does it once per build, not on every tick', async () => {
+      withJenkins(true);
+      service.onModuleInit();
+      await jest.advanceTimersByTimeAsync(3 * 60_000);
+
+      expect(engine.runAwsMonitor).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves pipeline results alone when the default credentials are in use', async () => {
+      withJenkins(false);
+      service.onModuleInit();
+      await jest.advanceTimersByTimeAsync(60_000);
+
+      expect(engine.runAwsMonitor).not.toHaveBeenCalled();
+    });
+  });
+
   it('stops ticking once destroyed', async () => {
     settings.get.mockResolvedValue(fakeSettings({ scanIntervalMinutes: 1 }));
     service.onModuleInit();

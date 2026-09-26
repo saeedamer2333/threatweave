@@ -16,8 +16,8 @@ checkout of the project and its real host path:
 ```bash
 docker run -d -p 8080:8080 -p 50000:50000 \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -e HOST_WORKSPACE=/absolute/path/to/threatweave/implementation \
-  -v /absolute/path/to/threatweave/implementation:/workspace \
+  -e HOST_WORKSPACE=/absolute/path/to/threatweave \
+  -v /absolute/path/to/threatweave:/workspace \
   saeedalameri/threatweave-jenkins:latest
 ```
 

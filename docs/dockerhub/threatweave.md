@@ -36,7 +36,10 @@ docker run -d --name threatweave \
 | SonarQube | http://localhost:9000 (password generated on first boot; see `docker logs threatweave`) |
 
 SonarQube configures itself on first boot, which takes a few minutes. The dashboard is empty
-until the first pipeline run: open it and click **Run scan**.
+until the first pipeline run: open it and click **Run scan**. With nothing mounted, that
+covers Trivy (the Juice Shop demo image), Checkov (the bundled Terraform) and AWS (if
+credentials are mounted). GitLeaks and SonarQube need your source code: see
+*Scan your own project* below.
 
 **Requirements:** Docker, and about **6 GB of free RAM** with SonarQube. On a smaller machine
 add `-e SONARQUBE_AUTOSTART=false`: the SAST stage then shows as *skipped* and everything
@@ -75,9 +78,9 @@ docker run -d --name threatweave \
   -p 3000:80 -p 4000:4000 -p 8080:8080 -p 50000:50000 -p 9000:9000 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v threatweave-jenkins-home:/var/jenkins_home \
-  -v /path/to/threatweave/implementation:/workspace \
+  -v /path/to/threatweave:/workspace \
   -v /path/to/your-project:/target:ro \
-  -e HOST_WORKSPACE=/path/to/threatweave/implementation \
+  -e HOST_WORKSPACE=/path/to/threatweave \
   -e TARGET_PATH=/path/to/your-project \
   saeedalameri/threatweave:latest
 ```

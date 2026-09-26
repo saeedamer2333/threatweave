@@ -176,7 +176,7 @@ absolute path to scan your own project instead of the bundled demo, and
 
 ```bash
 git clone https://github.com/saeedamer2333/threatweave.git
-cd threatweave/implementation
+cd threatweave
 
 cp .env.example .env                    # set HOST_WORKSPACE to this directory's host path
 scripts/fetch-demo-target.sh            # clones OWASP Juice Shop for GitLeaks/SonarQube to scan
@@ -214,9 +214,10 @@ docker run -d -p 4000:4000 saeedalameri/threatweave-api:latest
 docker run -d -p 3000:80   saeedalameri/threatweave-dashboard:latest
 ```
 
-That's it — no `.env`, no clone, no volumes. The API starts with the bundled
-sample findings (`aiops_engine/sample_inputs/`) already baked in, so
-`POST /api/scan` produces a real result immediately. Point the dashboard at a
+That's it — no `.env`, no clone, no volumes. The API starts with no results:
+the dashboard stays empty until a scan has produced reports (the Jenkins
+pipeline, or a full compose setup). To try the engine on the bundled sample
+reports instead, run `python aiops_engine/engine.py` from a clone. Point the dashboard at a
 different API host with `-e API_TARGET=host:port` (default `api:4000`, which
 only resolves inside a compose network — that's the one thing this mode
 doesn't give you for free).
@@ -238,8 +239,8 @@ scan anything:
 ```bash
 docker run -d -p 8080:8080 -p 50000:50000 \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -e HOST_WORKSPACE=/absolute/path/to/threatweave/implementation \
-  -v /absolute/path/to/threatweave/implementation:/workspace \
+  -e HOST_WORKSPACE=/absolute/path/to/threatweave \
+  -v /absolute/path/to/threatweave:/workspace \
   saeedalameri/threatweave-jenkins:latest
 ```
 
@@ -260,9 +261,11 @@ docker run -d --name threatweave \
 ```
 
 Dashboard on `:3000`, API directly on `:4000`, Jenkins on `:8080`, SonarQube
-on `:9000` — all reachable immediately, and `POST /api/scan` (or clicking
-"Run scan" in the dashboard) works out of the box against the baked-in
-sample findings, same as the split API image. Both volumes are optional but
+on `:9000` — all reachable immediately. The dashboard is empty until the
+first scan. With nothing mounted, "Run scan" covers Trivy (the Juice Shop
+demo image), Checkov (the bundled Terraform) and AWS (if credentials are
+mounted); GitLeaks and SonarQube need source code mounted at `/target` (see
+below). Both volumes are optional but
 recommended: without them, Jenkins configuration and scan history reset on
 every container recreation.
 
@@ -320,9 +323,8 @@ repo (so `aiops_engine/`/`aws_monitor/`/`infra/` still exist), pointing
 
 ```bash
 git clone https://github.com/saeedamer2333/threatweave.git
-# /path/to/threatweave/implementation below is this clone's own absolute
-# host path (implementation/, the same directory Option 2's HOST_WORKSPACE
-# points at) - it only needs to exist and contain aiops_engine/,
+# /path/to/threatweave below is this clone's own absolute host path
+# (the same directory Option 2's HOST_WORKSPACE points at) - it only needs to exist and contain aiops_engine/,
 # aws_monitor/ and infra/, the same three directories the image bakes in
 # by default.
 
@@ -330,14 +332,14 @@ docker run -d --name threatweave \
   -p 3000:80 -p 4000:4000 -p 8080:8080 -p 50000:50000 -p 9000:9000 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v threatweave-jenkins-home:/var/jenkins_home \
-  -v /path/to/threatweave/implementation:/workspace \
+  -v /path/to/threatweave:/workspace \
   -v /path/to/your-project:/target:ro \
-  -e HOST_WORKSPACE=/path/to/threatweave/implementation \
+  -e HOST_WORKSPACE=/path/to/threatweave \
   -e TARGET_PATH=/path/to/your-project \
   saeedalameri/threatweave:latest
 ```
 
-Both `/path/to/threatweave/implementation` and `/path/to/your-project` are
+Both `/path/to/threatweave` and `/path/to/your-project` are
 host paths, used identically to `HOST_WORKSPACE` and `TARGET_PATH` in
 `.env` for the docker-compose setup (Option 2) — this is the same
 mechanism, just passed as `-e` flags instead of an env file. Dropped the
@@ -468,7 +470,7 @@ reproducible, and incapable of inventing a CVE or a fix.
 ## Layout
 
 ```
-implementation/
+threatweave/
 ├── Jenkinsfile              6-stage pipeline (scanners -> engine -> publish)
 ├── docker-compose.yml       Jenkins, API, dashboard (+ sast/demo profiles)
 ├── Dockerfile               all-in-one image (Option 4) - all 3 processes, 1 container

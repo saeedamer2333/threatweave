@@ -12,6 +12,17 @@ set -euo pipefail
 
 REPO_URL="${THREATWEAVE_REPO:-https://github.com/saeedamer2333/threatweave.git}"
 INSTALL_DIR="${THREATWEAVE_DIR:-$HOME/threatweave}"
+
+# The repository root is the project itself (docker-compose.yml, Jenkinsfile,
+# scripts/ at the top level). Older layouts kept it under implementation/,
+# so accept either rather than assuming a subfolder that may not exist.
+project_dir() {
+    if [ -d "$INSTALL_DIR/implementation" ]; then
+        echo "$INSTALL_DIR/implementation"
+    else
+        echo "$INSTALL_DIR"
+    fi
+}
 BRANCH="${THREATWEAVE_BRANCH:-main}"
 
 # ----------------------------------------------------------------- output --
@@ -95,7 +106,7 @@ fetch_project() {
 # --------------------------------------------------------------- configure --
 configure() {
     info "Writing configuration"
-    cd "$INSTALL_DIR/implementation"
+    cd "$(project_dir)"
 
     # HOST_WORKSPACE must be the host-side absolute path: the pipeline runs
     # scanners as sibling containers, whose volume mounts are resolved by the
@@ -133,7 +144,7 @@ configure() {
     ok "Wrote .env (HOST_WORKSPACE=${host_path})"
 
     if [ "$target_path" = "./demo-app" ]; then
-        "$INSTALL_DIR/implementation/scripts/fetch-demo-target.sh"
+        "$(project_dir)/scripts/fetch-demo-target.sh"
         ok "Scan target: bundled demo (OWASP Juice Shop)"
     else
         ok "Scan target: ${target_path}  (mounted at /target)"
@@ -173,7 +184,7 @@ setup_sast() {
         return
     fi
     info "Setting up SonarQube for SAST (fully automatic - no browser needed)"
-    if "$INSTALL_DIR/implementation/scripts/setup-sonarqube.sh"; then
+    if "$(project_dir)/scripts/setup-sonarqube.sh"; then
         SAST_ENABLED=1
     else
         warn "SonarQube setup did not complete - SAST stays disabled for now."

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge, READONLY_POLICY, READONLY_POLICY_JSON } from './lib';
+import { isAwsMonitorRunning, healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge, READONLY_POLICY, READONLY_POLICY_JSON } from './lib';
 import type { Finding } from './types';
 
 function finding(overrides: Partial<Finding> = {}): Finding {
@@ -315,5 +315,25 @@ describe('evidenceText', () => {
   it('returns null for an unrecognised score key rather than guessing', () => {
     const f = finding({ score_evidence: { p_rf_basis: 'model' } });
     expect(evidenceText('not_a_real_key', f)).toBeNull();
+  });
+});
+
+describe('isAwsMonitorRunning', () => {
+  const stage = ['AIOps engine & dashboard update'];
+
+  it('is running while the monitor itself is printing', () => {
+    expect(isAwsMonitorRunning(stage, '+ python3 /workspace/aws_monitor/monitor.py --output x')).toBe(true);
+    expect(isAwsMonitorRunning(stage, 'checking S3 buckets ... 1 finding(s)')).toBe(true);
+    expect(isAwsMonitorRunning(stage, 'Connected to AWS account 123456789012, region ap-southeast-1')).toBe(true);
+  });
+
+  it('is not running once the engine has taken over the same stage', () => {
+    expect(isAwsMonitorRunning(stage, '+ python3 engine.py --input /workspace/findings/scan-inputs')).toBe(false);
+    expect(isAwsMonitorRunning(stage, '4/7 score')).toBe(false);
+  });
+
+  it('is not running outside that stage', () => {
+    expect(isAwsMonitorRunning(['Scans'], 'checking EC2 instances ... 0 finding(s)')).toBe(false);
+    expect(isAwsMonitorRunning(undefined, undefined)).toBe(false);
   });
 });

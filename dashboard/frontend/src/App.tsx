@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type { AiopsOutput, Finding, Cluster, HistoryPoint, Suppression, SourceStatus } from './types';
 import { api, ApiError, type PipelineStatus, type NewSuppression, type AwsStatus, type AppSettings, type DetectedTarget, type SonarQubeStatus, type AsyncSonarScanStatus } from './api';
-import { healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge, READONLY_POLICY_JSON } from './lib';
+import { healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge, READONLY_POLICY_JSON, isAwsMonitorRunning } from './lib';
 import './App.css';
 
 type View = 'overview' | 'findings' | 'clusters' | 'history' | 'settings';
@@ -1342,7 +1342,7 @@ const STAGE_TO_SOURCE: Record<string, string> = {
   'Secrets - GitLeaks': 'gitleaks',
   'Container - Trivy': 'trivy',
   'IaC - Checkov': 'checkov',
-  'AIOps engine & dashboard update': 'aws',
+  // The AWS monitor has no stage of its own - see isAwsMonitorRunning.
 };
 
 function DataSources({ sources, scan, elapsedLabel, asyncSonarScan }: {
@@ -1367,6 +1367,7 @@ function DataSources({ sources, scan, elapsedLabel, asyncSonarScan }: {
   // already showed as stopped/exited, simply waiting for a later run to
   // harvest its results, not doing any work any more.
   if (asyncSonarScan?.phase === 'running') runningSources.add('sonarqube');
+  if (isAwsMonitorRunning(scan?.activeStages, scan?.currentActivity)) runningSources.add('aws');
   return (
     <section className="block sources-block">
       {/* Distinct from the `scan` banner below: a build waiting on this

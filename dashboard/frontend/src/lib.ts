@@ -96,6 +96,15 @@ export function healthLabel(score: number): { text: string; cls: string } {
 /** Milliseconds since a scan started -> "3m 42s" / "8s", for the live elapsed
  * timer next to "Run scan". Negative/invalid input (clock skew, not started
  * yet) clamps to 0s rather than showing something nonsensical like "-4s". */
+/** The AWS monitor runs inside the pipeline's final "AIOps engine &
+ * dashboard update" stage but takes only seconds of it - the engine takes
+ * the rest. Only the monitor's own console output means it is actually
+ * running, so the AWS chip is not shown as "scanning" for the whole stage. */
+export function isAwsMonitorRunning(activeStages: string[] | undefined, currentActivity: string | undefined): boolean {
+  if (!(activeStages ?? []).includes('AIOps engine & dashboard update')) return false;
+  return /aws_monitor|monitor\.py|Connected to AWS|^Identity:|checking (EC2|Security groups|S3|IAM)/i.test(currentActivity ?? '');
+}
+
 export function formatElapsed(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const minutes = Math.floor(totalSeconds / 60);

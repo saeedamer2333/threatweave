@@ -470,7 +470,12 @@
 }
 .summary-card.kind { background: #fef2f2; color: #b91c1c; border-color: #fbdada; }
 .summary-card.exposed { background: #fef6e7; color: #96690a; border-color: #f0d99a; }
-.summary-card.fix { background: #ecfaf1; color: #0f7a3d; border-color: #cdefda; cursor: help; }
+.summary-card.fix {
+  background: #ecfaf1; color: #0f7a3d; border-color: #cdefda;
+  /* Advice is a full sentence: wrap it rather than clipping it. */
+  max-width: 100%; white-space: normal; align-items: flex-start; line-height: 1.45;
+}
+.summary-card.fix svg { margin-top: 2px; }
 .summary-card svg { flex-shrink: 0; }
 
 /* The full sentence still exists, just secondary now that the cards above

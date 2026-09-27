@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type { AiopsOutput, Finding, Cluster, HistoryPoint, Suppression, SourceStatus } from './types';
-import { api, ApiError, type PipelineStatus, type NewSuppression, type AwsStatus, type AppSettings, type DetectedTarget, type SonarQubeStatus, type AsyncSonarScanStatus } from './api';
-import { healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge, READONLY_POLICY_JSON, isAwsMonitorRunning } from './lib';
+import { api, ApiError, type PathCheck, type PipelineStatus, type NewSuppression, type AwsStatus, type AppSettings, type DetectedTarget, type SonarQubeStatus, type AsyncSonarScanStatus } from './api';
+import { healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge, READONLY_POLICY_JSON, isAwsMonitorRunning, originLabel, iacKindLabel } from './lib';
 import './App.css';
 
 type View = 'overview' | 'findings' | 'clusters' | 'history' | 'settings';
@@ -1151,8 +1151,33 @@ function PipelineTargetCard({ settings, save, saving }: {
   const [draft, setDraft] = useState(p);
   useEffect(() => { setDraft(p); }, [p]);
 
+  // Only the changed field is sent, so the API records exactly what the user
+  // chose - the other fields keep following detection/install values.
   const saveField = (key: keyof typeof p, value: string | boolean) =>
-    save({ pipeline: { ...p, [key]: value } as never });
+    save({ pipeline: { [key]: value } as never });
+
+  // Typed paths are checked right away, instead of a scan finding out later.
+  const [pathChecks, setPathChecks] = useState<{ sourceDir?: PathCheck; iacDir?: PathCheck }>({});
+  const checkField = (field: 'sourceDir' | 'iacDir', value: string) => {
+    api.checkPath(field === 'iacDir' ? 'iac' : 'source', value)
+      .then((r) => setPathChecks((prev) => ({ ...prev, [field]: r })))
+      .catch(() => {});
+  };
+  useEffect(() => {
+    if (p.sourceDir) checkField('sourceDir', p.sourceDir);
+    if (p.iacDir) checkField('iacDir', p.iacDir);
+  }, [p.sourceDir, p.iacDir]);
+
+  const origin = (field: 'sourceDir' | 'iacDir' | 'targetImage' | 'sonarProjectKey') => {
+    const label = originLabel(settings.pipelineOrigin?.[field]);
+    return label && <span className={`origin-tag origin-${settings.pipelineOrigin?.[field]}`} title={label.title}>{label.text}</span>;
+  };
+  const checkLine = (field: 'sourceDir' | 'iacDir') => {
+    const c = pathChecks[field];
+    if (!c || c.level === 'info') return null;
+    const icon = c.level === 'ok' ? '✓' : c.level === 'warn' ? '⚠' : '✗';
+    return <div className={`path-check path-check-${c.level}`}>{icon} {c.message}</div>;
+  };
 
   // Inspects what's actually mounted at /target and offers it as a one-click
   // suggestion - never applied automatically, since "Run scan" acting on
@@ -1177,8 +1202,8 @@ function PipelineTargetCard({ settings, save, saving }: {
     const patch: Partial<typeof p> = { sourceDir: detected.sourceDir };
     if (detected.projectName) patch.sonarProjectKey = detected.projectName;
     if (detected.iacDir) patch.iacDir = detected.iacDir;
-    if (!detected.hasDockerfile) patch.targetImage = '';
-    save({ pipeline: { ...p, ...patch } });
+    if (!detected.hasDockerfile && p.targetImage) patch.targetImage = '';
+    save({ pipeline: patch as never });
     setDismissed(true);
   };
 
@@ -1204,7 +1229,7 @@ function PipelineTargetCard({ settings, save, saving }: {
               {' '}(or <span className="mono">TARGET_PATH</span> in <span className="mono">.env</span>). ThreatWeave never changes your code.
             </li>
             <li><b>Source directory</b>: <span className="mono">/target</span>. GitLeaks looks for secrets, SonarQube for code vulnerabilities.</li>
-            <li><b>IaC directory</b>: your Terraform folder, for example <span className="mono">/target/infra</span>, for Checkov.</li>
+            <li><b>IaC directory</b>: the folder with your Terraform, CloudFormation or CDK output (<span className="mono">cdk.out</span>), for Checkov.</li>
             <li><b>Container image</b>: the image you deploy, for example <span className="mono">myapp:latest</span>, for Trivy.</li>
             <li>Click <b>Run scan</b>. Fields left empty are skipped; AWS checks run whenever credentials are connected.</li>
           </ol>
@@ -1221,7 +1246,7 @@ function PipelineTargetCard({ settings, save, saving }: {
             <span>
               {detected!.projectName ? `Found "${detected!.projectName}" (from its package.json)` : 'Found a project'}
               {detected!.hasDockerfile ? ' with its own Dockerfile.' : ' with no Dockerfile - Container image would be cleared.'}
-              {detected!.iacDir ? ` Terraform found in ${detected!.iacDir}.` : ''}
+              {detected!.iacDir ? ` Infrastructure code found in ${detected!.iacDir}.` : ''}
               {' '}Apply these as the real scan target?
             </span>
           </div>
@@ -1234,7 +1259,7 @@ function PipelineTargetCard({ settings, save, saving }: {
 
       <label className="set-row hinted">
         <span className="set-label-group">
-          <span className="set-label">Source directory {!p.sourceDir && <span className="skip-tag">GitLeaks and SonarQube skipped</span>}</span>
+          <span className="set-label">Source directory {origin('sourceDir')}{!p.sourceDir && <span className="skip-tag">GitLeaks and SonarQube skipped</span>}</span>
           <span className="set-hint">What GitLeaks and SonarQube scan. Use <span className="mono">/target</span> for the project you mounted there.</span>
         </span>
         <input
@@ -1245,11 +1270,12 @@ function PipelineTargetCard({ settings, save, saving }: {
           placeholder="/target"
         />
       </label>
+      {checkLine('sourceDir')}
 
       <label className="set-row hinted">
         <span className="set-label-group">
-          <span className="set-label">IaC directory {!p.iacDir && <span className="skip-tag">Checkov skipped</span>}</span>
-          <span className="set-hint">Where your Terraform or CloudFormation lives, for example <span className="mono">/target/infra</span>. Leave empty if the project has none.</span>
+          <span className="set-label">IaC directory {origin('iacDir')}{!p.iacDir && <span className="skip-tag">Checkov skipped</span>}</span>
+          <span className="set-hint">Where your Terraform, CloudFormation or CDK output (<span className="mono">cdk.out</span>) lives, for example <span className="mono">/target/infra</span>. Leave empty if the project has none.</span>
         </span>
         <input
           className="set-input"
@@ -1259,10 +1285,32 @@ function PipelineTargetCard({ settings, save, saving }: {
           placeholder="/target/infra"
         />
       </label>
+      {detected?.sourceDir && (detected.iacCandidates?.length ?? 0) > 0 && (
+        <div className="iac-candidates">
+          <span>Found in your project:</span>
+          {detected.iacCandidates!.map((c) => (
+            <button
+              key={c.path}
+              type="button"
+              className={`iac-chip ${c.path === p.iacDir ? 'active' : ''}`}
+              onClick={() => { setDraft({ ...draft, iacDir: c.path }); saveField('iacDir', c.path); }}
+              title="Use this folder for Checkov"
+            >
+              <span className="mono">{c.path}</span> · {iacKindLabel(c.kind, c.files)}
+            </button>
+          ))}
+        </div>
+      )}
+      {detected?.sourceDir && (detected.iacCandidates?.length ?? 0) === 0 && !p.iacDir && (
+        <div className="path-check path-check-warn">
+          ⚠ No Terraform, CloudFormation or CDK output found in the project. Enter the folder yourself, or leave it empty to skip Checkov.
+        </div>
+      )}
+      {checkLine('iacDir')}
 
       <label className="set-row hinted">
         <span className="set-label-group">
-          <span className="set-label">Container image {!p.targetImage && <span className="skip-tag">Trivy skipped</span>}</span>
+          <span className="set-label">Container image {origin('targetImage')}{!p.targetImage && <span className="skip-tag">Trivy skipped</span>}</span>
           <span className="set-hint">The image you deploy, which Trivy pulls and scans, for example <span className="mono">myapp:latest</span>. Leave empty if the project has no container.</span>
         </span>
         <input
@@ -1276,7 +1324,7 @@ function PipelineTargetCard({ settings, save, saving }: {
 
       <label className="set-row hinted">
         <span className="set-label-group">
-          <span className="set-label">SonarQube project key</span>
+          <span className="set-label">SonarQube project key {origin('sonarProjectKey')}</span>
           <span className="set-hint">A name for this project in SonarQube, for example <span className="mono">accesshub</span>. Empty uses the source folder's name.</span>
         </span>
         <input

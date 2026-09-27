@@ -1,14 +1,16 @@
 jest.mock('fs/promises');
 jest.mock('fs');
 jest.mock('http');
+jest.mock('child_process');
 jest.mock('../config/paths', () => ({
-  PATHS: { findingsDir: '/fake/findings', target: '/fake/target' },
+  PATHS: { findingsDir: '/fake/findings', target: '/fake/target', engineDir: '/fake/engine', python: 'python3' },
 }));
 
 import { readFile, writeFile } from 'fs/promises';
-import { existsSync, readdirSync } from 'fs';
+import { existsSync } from 'fs';
 import { join } from 'path';
 import * as http from 'http';
+import { execFile } from 'child_process';
 import type { IncomingMessage, ClientRequest } from 'http';
 import { SettingsService } from './settings.service';
 
@@ -55,7 +57,7 @@ const SETTINGS_PATH = join('/fake/findings', 'settings.json');
 const mockReadFile = readFile as jest.MockedFunction<typeof readFile>;
 const mockWriteFile = writeFile as jest.MockedFunction<typeof writeFile>;
 const mockExistsSync = existsSync as jest.MockedFunction<typeof existsSync>;
-const mockReaddirSync = readdirSync as jest.MockedFunction<typeof readdirSync>;
+const mockExecFile = execFile as unknown as jest.Mock;
 
 describe('SettingsService', () => {
   let service: SettingsService;
@@ -83,6 +85,7 @@ describe('SettingsService', () => {
           runAwsMonitor: true,
           failOnCritical: false,
         },
+        pipelineOrigin: { sourceDir: 'none', iacDir: 'none', targetImage: 'none', sonarProjectKey: 'none' },
       });
     });
 
@@ -238,98 +241,124 @@ describe('SettingsService', () => {
   });
 
   describe('detectTarget', () => {
-    beforeEach(() => {
-      // A project is mounted unless a test says otherwise.
-      mockReaddirSync.mockImplementation(((dir: string) => (dir === '/fake/target' ? ['src'] : [])) as never);
-    });
+    // Detection itself lives in aiops_engine/target_detect.py (tested there),
+    // shared with the all-in-one image's startup - these cover the API's use of it.
+    function pythonAnswers(stdout: string, err: Error | null = null) {
+      mockExecFile.mockImplementation(((_cmd: string, _args: string[], _opts: unknown, cb: (e: Error | null, out: string) => void) => {
+        cb(err, stdout);
+        return {} as never;
+      }) as never);
+    }
 
-    it('suggests nothing when no project is mounted at /target', async () => {
-      mockExistsSync.mockReturnValue(false);
-      mockReaddirSync.mockReturnValue([] as never);
-
-      const result = await service.detectTarget();
-
-      expect(result.sourceDir).toBe('');
-      expect(result.iacDir).toBeUndefined();
-    });
-    it('suggests an infra/ folder holding Terraform files for Checkov', async () => {
-      mockExistsSync.mockReturnValue(false);
-      mockReaddirSync.mockImplementation(((dir: string) =>
-        dir === join('/fake/target', 'infra') ? ['main.tf', 'README.md'] : dir === '/fake/target' ? ['infra'] : []) as never);
+    it('runs the shared Python detection against the mounted project', async () => {
+      pythonAnswers(JSON.stringify({
+        sourceDir: '/fake/target', projectName: 'accesshub', hasDockerfile: false,
+        iacDir: '/fake/target/infra/cdk.out',
+        iacCandidates: [{ path: '/fake/target/infra/cdk.out', kind: 'cdk', files: 3 }],
+      }));
 
       const result = await service.detectTarget();
 
-      expect(result.iacDir).toBe(join('/fake/target', 'infra'));
-    });
-
-    it('suggests no IaC folder when the project has no Terraform', async () => {
-      mockExistsSync.mockReturnValue(false);
-      mockReaddirSync.mockImplementation(((dir: string) => (dir === '/fake/target' ? ['src'] : [])) as never);
-
-      const result = await service.detectTarget();
-
-      expect(result.iacDir).toBeUndefined();
-    });
-
-    it('suggests /target itself when there is no nested juice-shop demo folder', async () => {
-      mockExistsSync.mockReturnValue(false);
-
-      const result = await service.detectTarget();
-
-      expect(result.sourceDir).toBe('/fake/target');
-      expect(result.hasDockerfile).toBe(false);
-      expect(result.projectName).toBeUndefined();
-    });
-
-    it('suggests /target/juice-shop when the bundled demo layout is detected', async () => {
-      mockExistsSync.mockImplementation((p) => (p as string).endsWith('juice-shop'));
-
-      const result = await service.detectTarget();
-
-      expect(result.sourceDir).toBe(join('/fake/target', 'juice-shop'));
-    });
-
-    it("suggests a project key from the mounted project's package.json name", async () => {
-      mockExistsSync.mockImplementation((p) => (p as string).endsWith('package.json'));
-      mockReadFile.mockResolvedValue(JSON.stringify({ name: 'accesshub' }) as never);
-
-      const result = await service.detectTarget();
-
+      const [cmd, args] = mockExecFile.mock.calls[0] as unknown as [string, string[]];
+      expect(cmd).toBe('python3');
+      expect(args).toEqual([join('/fake/engine', 'target_detect.py'), 'targets', '--root', '/fake/target']);
       expect(result.projectName).toBe('accesshub');
+      expect(result.iacCandidates[0].kind).toBe('cdk');
     });
 
-    it('sanitises a scoped npm package name into a valid SonarQube project key', async () => {
-      mockExistsSync.mockImplementation((p) => (p as string).endsWith('package.json'));
-      mockReadFile.mockResolvedValue(JSON.stringify({ name: '@my-org/my-app' }) as never);
+    it('suggests nothing, rather than failing the page, when detection itself fails', async () => {
+      pythonAnswers('', new Error('python3 not found'));
 
       const result = await service.detectTarget();
 
-      expect(result.projectName).toBe('-my-org-my-app');
+      expect(result).toEqual({ sourceDir: '', hasDockerfile: false, iacCandidates: [] });
+    });
+  });
+
+  describe('checkPath', () => {
+    function pythonAnswers(stdout: string) {
+      mockExecFile.mockImplementation(((_cmd: string, _args: string[], _opts: unknown, cb: (e: Error | null, out: string) => void) => {
+        cb(null, stdout);
+        return {} as never;
+      }) as never);
+    }
+
+    it('passes the kind and typed path to the shared check', async () => {
+      pythonAnswers(JSON.stringify({ ok: false, level: 'error', message: '/target/deply does not exist.' }));
+
+      const result = await service.checkPath('iac', '/target/deply');
+
+      const [, args] = mockExecFile.mock.calls[0] as unknown as [string, string[]];
+      expect(args.slice(1)).toEqual(['check', '--kind', 'iac', '--path', '/target/deply']);
+      expect(result.level).toBe('error');
     });
 
-    it('reports no project name when there is no readable package.json', async () => {
+    it('rejects an unknown kind without running anything', async () => {
+      const result = await service.checkPath('rm -rf', '/target');
+
+      expect(result.ok).toBe(false);
+      expect(mockExecFile).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('pipelineOrigin', () => {
+    const saved = { ...process.env };
+    afterEach(() => { process.env = { ...saved }; });
+
+    it('labels values filled by startup detection, given at install, and left empty', async () => {
+      Object.assign(process.env, {
+        SCAN_SOURCE_DIR: '/target', SCAN_IAC_DIR: '/target/infra/cdk.out', SCAN_SONAR_KEY: 'accesshub',
+        SCAN_DETECTED: 'SCAN_SOURCE_DIR,SCAN_IAC_DIR',
+      });
+      delete process.env.SCAN_IMAGE;
       mockExistsSync.mockReturnValue(false);
 
-      const result = await service.detectTarget();
+      const { pipelineOrigin } = await service.get();
 
-      expect(result.projectName).toBeUndefined();
+      expect(pipelineOrigin).toEqual({
+        sourceDir: 'detected', iacDir: 'detected', sonarProjectKey: 'install', targetImage: 'none',
+      });
     });
 
-    it('reports hasDockerfile true only when the target actually has one', async () => {
-      mockExistsSync.mockImplementation((p) => (p as string).endsWith('Dockerfile'));
+    it('labels a field the user saved in Settings, and only that field', async () => {
+      process.env.SCAN_SOURCE_DIR = '/target';
+      process.env.SCAN_DETECTED = 'SCAN_SOURCE_DIR';
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockResolvedValue(JSON.stringify({
+        pipeline: { iacDir: '/target/deploy' }, pipelineUserSet: ['iacDir'],
+      }) as never);
 
-      const result = await service.detectTarget();
+      const result = await service.get();
 
-      expect(result.hasDockerfile).toBe(true);
+      expect(result.pipeline.iacDir).toBe('/target/deploy');
+      expect(result.pipelineOrigin?.iacDir).toBe('saved');
+      expect(result.pipelineOrigin?.sourceDir).toBe('detected');
     });
 
-    it('does not throw when package.json exists but is not valid JSON', async () => {
-      mockExistsSync.mockImplementation((p) => (p as string).endsWith('package.json'));
-      mockReadFile.mockResolvedValue('{not valid json' as never);
+    it('saves only the fields the user changed, so detected values keep following detection', async () => {
+      process.env.SCAN_SOURCE_DIR = '/target';
+      process.env.SCAN_IAC_DIR = '/target/infra/cdk.out';
+      process.env.SCAN_DETECTED = 'SCAN_SOURCE_DIR,SCAN_IAC_DIR';
+      mockExistsSync.mockReturnValue(false);
+      mockWriteFile.mockResolvedValue(undefined as never);
 
-      const result = await service.detectTarget();
+      const result = await service.update({ pipeline: { targetImage: 'accesshub:latest' } as never });
 
-      expect(result.projectName).toBeUndefined();
+      const written = JSON.parse(mockWriteFile.mock.calls[0][1] as string);
+      expect(written.pipeline).toEqual({ targetImage: 'accesshub:latest' });
+      expect(written.pipelineUserSet).toEqual(['targetImage']);
+      expect(result.pipeline.iacDir).toBe('/target/infra/cdk.out');
+      expect(result.pipelineOrigin?.targetImage).toBe('saved');
+      expect(result.pipelineOrigin?.iacDir).toBe('detected');
+    });
+
+    it('treats every saved pipeline value in an older settings file as the user\'s choice', async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockResolvedValue(JSON.stringify({ pipeline: { sourceDir: '/target/juice-shop' } }) as never);
+
+      const { pipelineOrigin } = await service.get();
+
+      expect(pipelineOrigin?.sourceDir).toBe('saved');
     });
   });
 

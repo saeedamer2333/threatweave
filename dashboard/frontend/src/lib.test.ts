@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isAwsMonitorRunning, healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge, READONLY_POLICY, READONLY_POLICY_JSON } from './lib';
+import { isAwsMonitorRunning, originLabel, iacKindLabel, healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge, READONLY_POLICY, READONLY_POLICY_JSON } from './lib';
 import type { Finding } from './types';
 
 function finding(overrides: Partial<Finding> = {}): Finding {
@@ -335,5 +335,26 @@ describe('isAwsMonitorRunning', () => {
   it('is not running outside that stage', () => {
     expect(isAwsMonitorRunning(['Scans'], 'checking EC2 instances ... 0 finding(s)')).toBe(false);
     expect(isAwsMonitorRunning(undefined, undefined)).toBe(false);
+  });
+});
+
+describe('originLabel', () => {
+  it('names where a Settings value came from', () => {
+    expect(originLabel('detected')?.text).toBe('Detected');
+    expect(originLabel('saved')?.text).toBe('Set by you');
+    expect(originLabel('install')?.text).toBe('From install');
+  });
+
+  it('says nothing for an empty field, which already shows "skipped"', () => {
+    expect(originLabel('none')).toBeNull();
+    expect(originLabel(undefined)).toBeNull();
+  });
+});
+
+describe('iacKindLabel', () => {
+  it('describes a detected IaC folder', () => {
+    expect(iacKindLabel('cdk', 3)).toBe('3 CDK templates');
+    expect(iacKindLabel('terraform', 1)).toBe('1 Terraform file');
+    expect(iacKindLabel('cloudformation', 2)).toBe('2 CloudFormation templates');
   });
 });

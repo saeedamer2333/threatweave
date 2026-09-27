@@ -130,7 +130,12 @@ ENV SONAR_WEB_JAVAOPTS="-Xmx384m -Xms128m -XX:+HeapDumpOnOutOfMemoryError"
 ENV SONAR_CE_JAVAOPTS="-Xmx384m -Xms128m -XX:+HeapDumpOnOutOfMemoryError"
 COPY sonarqube-autoconfig.sh /usr/local/bin/sonarqube-autoconfig.sh
 COPY jenkins-entrypoint.sh /usr/local/bin/jenkins-entrypoint.sh
-RUN chmod +x /usr/local/bin/sonarqube-autoconfig.sh /usr/local/bin/jenkins-entrypoint.sh
+COPY threatweave-start.sh /usr/local/bin/threatweave-start.sh
+# Strip any Windows line endings a checkout may have added, so the scripts run.
+RUN sed -i 's/\r$//' /usr/local/bin/sonarqube-autoconfig.sh /usr/local/bin/jenkins-entrypoint.sh \
+        /usr/local/bin/threatweave-start.sh \
+    && chmod +x /usr/local/bin/sonarqube-autoconfig.sh /usr/local/bin/jenkins-entrypoint.sh \
+        /usr/local/bin/threatweave-start.sh
 
 # Jenkins plugins, CasC config and the pipeline-approval hook - baked in via
 # the official image's /usr/share/jenkins/ref/ convention, which seeds
@@ -193,4 +198,5 @@ COPY supervisord.conf /etc/supervisor/conf.d/threatweave.conf
 
 EXPOSE 80 4000 8080 50000 9000
 WORKDIR /workspace
-ENTRYPOINT ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/threatweave.conf"]
+# threatweave-start.sh detects host paths and scan targets, then execs supervisord.
+ENTRYPOINT ["/usr/local/bin/threatweave-start.sh"]

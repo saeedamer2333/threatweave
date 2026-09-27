@@ -105,6 +105,23 @@ export function isAwsMonitorRunning(activeStages: string[] | undefined, currentA
   return /aws_monitor|monitor\.py|Connected to AWS|^Identity:|checking (EC2|Security groups|S3|IAM)/i.test(currentActivity ?? '');
 }
 
+/** Settings label for where a pipeline target's value came from; null when
+ * there is nothing worth saying (an empty field already shows "skipped"). */
+export function originLabel(origin: string | undefined): { text: string; title: string } | null {
+  switch (origin) {
+    case 'detected': return { text: 'Detected', title: 'Found automatically in the mounted project' };
+    case 'saved': return { text: 'Set by you', title: 'Saved in Settings - detection never overwrites it' };
+    case 'install': return { text: 'From install', title: 'Given with -e SCAN_... when ThreatWeave was started' };
+    default: return null;
+  }
+}
+
+/** Short label for a detected IaC folder, e.g. "3 CDK templates". */
+export function iacKindLabel(kind: string, files: number): string {
+  const name = kind === 'cdk' ? 'CDK template' : kind === 'cloudformation' ? 'CloudFormation template' : 'Terraform file';
+  return `${files} ${name}${files === 1 ? '' : 's'}`;
+}
+
 export function formatElapsed(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const minutes = Math.floor(totalSeconds / 60);

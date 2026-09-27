@@ -96,19 +96,33 @@ export interface PipelineSettings {
   failOnCritical: boolean;
 }
 
+/** Where a pipeline target's value came from. */
+export type TargetOrigin = 'saved' | 'install' | 'detected' | 'none';
+
 export interface AppSettings {
   awsRegion: string;
   checks: { ec2: boolean; sg: boolean; s3: boolean; iam: boolean };
   scanIntervalMinutes: number;
   pipeline: PipelineSettings;
+  /** Read-only, from the API: where each target value came from. */
+  pipelineOrigin?: Partial<Record<'sourceDir' | 'iacDir' | 'targetImage' | 'sonarProjectKey', TargetOrigin>>;
+}
+
+/** Result of checking a typed path before it is scanned. */
+export interface PathCheck {
+  ok: boolean;
+  level: 'ok' | 'warn' | 'error' | 'info';
+  message: string;
 }
 
 export interface DetectedTarget {
   sourceDir: string;
   projectName?: string;
   hasDockerfile: boolean;
-  /** A folder with Terraform files, for Checkov - absent when none found. */
+  /** The best IaC folder, for Checkov - absent when none found. */
   iacDir?: string;
+  /** Every folder with Terraform, CDK or CloudFormation files, best first. */
+  iacCandidates?: { path: string; kind: 'terraform' | 'cdk' | 'cloudformation'; files: number }[];
 }
 
 export interface SonarQubeStatus {
@@ -158,6 +172,8 @@ export const api = {
   updateSettings: (body: Partial<AppSettings>) =>
     request<AppSettings>('/settings', { method: 'PUT', body: JSON.stringify(body) }),
   detectTarget: () => request<DetectedTarget>('/settings/detect-target'),
+  checkPath: (kind: 'iac' | 'source', path: string) =>
+    request<PathCheck>(`/settings/check-path?kind=${kind}&path=${encodeURIComponent(path)}`),
   getSonarQubeStatus: () => request<SonarQubeStatus>('/settings/sonarqube-status'),
   getAsyncSonarScanStatus: () => request<AsyncSonarScanStatus>('/settings/sonarqube-scan-status'),
   getSuppressions: () => request<Suppression[]>('/suppressions'),

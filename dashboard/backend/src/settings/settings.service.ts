@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { readFile, writeFile } from 'fs/promises';
-import { existsSync, readdirSync } from 'fs';
+import { existsSync } from 'fs';
+import { execFile } from 'child_process';
 import { join } from 'path';
 import * as http from 'http';
 import { PATHS } from '../config/paths';
@@ -22,6 +23,9 @@ export interface PipelineSettings {
   failOnCritical: boolean;
 }
 
+/** Where a pipeline target's current value came from, for Settings labels. */
+export type TargetOrigin = 'saved' | 'install' | 'detected' | 'none';
+
 export interface AppSettings {
   /** AWS region the cloud monitor scans. Empty means use the profile default. */
   awsRegion: string;
@@ -33,14 +37,27 @@ export interface AppSettings {
    * parameter defaults (casc.yaml), so nothing changes for an existing
    * install until someone edits these. */
   pipeline: PipelineSettings;
+  /** Read-only: where each target value came from. Not saved. */
+  pipelineOrigin?: Partial<Record<TargetKey, TargetOrigin>>;
 }
+
+type TargetKey = 'sourceDir' | 'iacDir' | 'targetImage' | 'sonarProjectKey';
+
+/** Each pipeline target and the environment variable that seeds it. */
+const TARGET_ENV: Record<TargetKey, string> = {
+  sourceDir: 'SCAN_SOURCE_DIR',
+  iacDir: 'SCAN_IAC_DIR',
+  targetImage: 'SCAN_IMAGE',
+  sonarProjectKey: 'SCAN_SONAR_KEY',
+};
 
 /**
  * What "Run scan" scans before the user has chosen anything: read from the
- * environment (SCAN_* in .env, or `-e` on docker run) and empty otherwise.
- * A fresh install scans nothing it was not told to, and an empty target is
- * skipped by the pipeline rather than pointed at a demo. Must stay in step
- * with the Jenkins job's own defaults in jenkins/casc.yaml.
+ * environment and empty otherwise. SCAN_* values come either from the user
+ * (.env, or `-e` on docker run) or, in the all-in-one image, from startup
+ * detection of the mounted project (target_detect.py, which lists the ones it
+ * filled in SCAN_DETECTED). An empty target is skipped by the pipeline rather
+ * than pointed at a demo. Must stay in step with jenkins/casc.yaml.
  */
 function pipelineDefaults(): PipelineSettings {
   const env = (name: string) => (process.env[name] ?? '').trim();
@@ -63,54 +80,107 @@ function defaults(): AppSettings {
   };
 }
 
-/** Folders where a project's Terraform usually lives, checked in order. */
-const IAC_CANDIDATES = ['infra', 'terraform', 'iac', 'infrastructure', 'deploy', '.'];
-
-function hasTerraform(dir: string): boolean {
-  try {
-    const entries = readdirSync(dir);
-    return Array.isArray(entries) && entries.some((f) => String(f).endsWith('.tf'));
-  } catch {
-    return false;
-  }
-}
-
 const SETTINGS_FILE =
   process.env.SETTINGS_FILE ?? join(PATHS.findingsDir, 'settings.json');
+
+/** What the saved file holds: settings, plus which pipeline keys the user
+ * actually chose (so detected or install-time values are not frozen into
+ * the file the first time any other setting is saved). */
+interface SavedSettings extends Partial<AppSettings> {
+  pipelineUserSet?: string[];
+}
+
+export interface DetectedTarget {
+  sourceDir: string;
+  projectName?: string;
+  hasDockerfile: boolean;
+  /** The best IaC folder, for Checkov - absent when none found. */
+  iacDir?: string;
+  /** Every folder with Terraform/CDK/CloudFormation, best first. */
+  iacCandidates: { path: string; kind: 'terraform' | 'cdk' | 'cloudformation'; files: number }[];
+}
+
+export interface PathCheck {
+  ok: boolean;
+  level: 'ok' | 'warn' | 'error' | 'info';
+  message: string;
+}
 
 @Injectable()
 export class SettingsService {
   private readonly logger = new Logger(SettingsService.name);
 
-  async get(): Promise<AppSettings> {
-    const DEFAULTS = defaults();
-    if (!existsSync(SETTINGS_FILE)) return DEFAULTS;
+  private async readSaved(): Promise<SavedSettings | null> {
+    if (!existsSync(SETTINGS_FILE)) return null;
     try {
-      const raw = await readFile(SETTINGS_FILE, 'utf-8');
-      const saved = JSON.parse(raw) as Partial<AppSettings>;
-      // Merge so a settings file written by an older version still loads.
-      return {
-        ...DEFAULTS,
-        ...saved,
-        checks: { ...DEFAULTS.checks, ...(saved.checks ?? {}) },
-        pipeline: { ...DEFAULTS.pipeline, ...(saved.pipeline ?? {}) },
-      };
+      return JSON.parse(await readFile(SETTINGS_FILE, 'utf-8')) as SavedSettings;
     } catch (err) {
       this.logger.warn(`Could not read settings, using defaults: ${err}`);
-      return DEFAULTS;
+      return null;
     }
   }
 
+  /** Pipeline keys the user chose. A file written before this was tracked
+   * counts every saved pipeline key as the user's choice. */
+  private userSetKeys(saved: SavedSettings | null): Set<string> {
+    if (!saved) return new Set();
+    return new Set(saved.pipelineUserSet ?? Object.keys(saved.pipeline ?? {}));
+  }
+
+  /** Settings as the rest of the app sees them: defaults, then the saved
+   * file on top, plus where each target value came from. */
+  private compose(saved: SavedSettings | null): AppSettings {
+    const DEFAULTS = defaults();
+    const { pipelineUserSet: _ignored, pipelineOrigin: _stale, ...rest } = saved ?? {};
+    // Merge so a settings file written by an older version still loads.
+    const merged: AppSettings = saved
+      ? {
+          ...DEFAULTS,
+          ...rest,
+          checks: { ...DEFAULTS.checks, ...(saved.checks ?? {}) },
+          pipeline: { ...DEFAULTS.pipeline, ...(saved.pipeline ?? {}) },
+        }
+      : DEFAULTS;
+
+    const userSet = this.userSetKeys(saved);
+    const detected = new Set((process.env.SCAN_DETECTED ?? '').split(',').map((v) => v.trim()).filter(Boolean));
+    const origin: Partial<Record<TargetKey, TargetOrigin>> = {};
+    for (const key of Object.keys(TARGET_ENV) as TargetKey[]) {
+      const envName = TARGET_ENV[key];
+      if (userSet.has(key)) origin[key] = 'saved';
+      else if ((process.env[envName] ?? '').trim()) origin[key] = detected.has(envName) ? 'detected' : 'install';
+      else origin[key] = 'none';
+    }
+    return { ...merged, pipelineOrigin: origin };
+  }
+
+  async get(): Promise<AppSettings> {
+    return this.compose(await this.readSaved());
+  }
+
   async update(patch: Partial<AppSettings>): Promise<AppSettings> {
-    const current = await this.get();
-    const next: AppSettings = {
-      ...current,
-      ...patch,
+    const saved = await this.readSaved();
+    const current = this.compose(saved);
+    const userSet = this.userSetKeys(saved);
+    for (const key of Object.keys(patch.pipeline ?? {})) userSet.add(key);
+
+    const pipeline = { ...current.pipeline, ...(patch.pipeline ?? {}) };
+    // Only the user's own pipeline choices are written down; everything else
+    // keeps following the environment/detection on the next start.
+    const storedPipeline = Object.fromEntries(
+      Object.entries(pipeline).filter(([key]) => userSet.has(key)),
+    );
+    const { pipelineOrigin: _o, ...currentRest } = current;
+    const { pipelineOrigin: _p, ...patchRest } = patch;
+    const next: SavedSettings = {
+      ...currentRest,
+      ...patchRest,
       checks: { ...current.checks, ...(patch.checks ?? {}) },
-      pipeline: { ...current.pipeline, ...(patch.pipeline ?? {}) },
+      pipeline: storedPipeline as unknown as PipelineSettings,
+      pipelineUserSet: [...userSet],
     };
     await writeFile(SETTINGS_FILE, JSON.stringify(next, null, 2), 'utf-8');
-    return next;
+    return this.compose(next);
   }
 
   /** The --checks value for the AWS monitor, e.g. "ec2,sg,s3". */
@@ -122,65 +192,52 @@ export class SettingsService {
       .join(',');
   }
 
+  /** Runs aiops_engine/target_detect.py - the same detection the all-in-one
+   * image runs at startup - and parses its JSON answer. */
+  private runDetect(args: string[]): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      execFile(
+        PATHS.python,
+        [join(PATHS.engineDir, 'target_detect.py'), ...args],
+        { timeout: 20_000, maxBuffer: 1024 * 1024 },
+        (err, stdout) => {
+          if (err) return reject(err);
+          try {
+            resolve(JSON.parse(String(stdout)));
+          } catch (parseErr) {
+            reject(parseErr);
+          }
+        },
+      );
+    });
+  }
+
   /**
    * Inspects whatever is actually mounted at PATHS.target and suggests real
-   * Pipeline target values from it, rather than leaving the fields pinned to
-   * the demo forever. This is a *suggestion* the frontend offers the user to
-   * apply, not something that silently overwrites saved settings - what
-   * "Run scan" actually does should always be something the user explicitly
-   * chose, per PipelineSettings' own contract.
+   * Pipeline target values from it, including every IaC folder found (so a
+   * project that keeps Terraform or CDK somewhere unusual can still pick it).
+   * A suggestion only: never overwrites a value the user saved.
    */
-  async detectTarget(): Promise<{
-    sourceDir: string;
-    projectName?: string;
-    hasDockerfile: boolean;
-    /** A folder with Terraform files, for Checkov - absent when none found. */
-    iacDir?: string;
-  }> {
-    const root = PATHS.target;
-    // Nothing mounted (an empty /target): there is no project to suggest.
-    let mounted = false;
+  async detectTarget(): Promise<DetectedTarget> {
     try {
-      const entries = readdirSync(root);
-      mounted = Array.isArray(entries) && entries.length > 0;
-    } catch {
-      mounted = false;
-    }
-    if (!mounted) {
-      return { sourceDir: '', hasDockerfile: false };
-    }
-    // The bundled demo nests its real content one level down
-    // (demo-app/juice-shop/); a project mounted directly at /target has no
-    // such subfolder, so its own root is what should be scanned.
-    const sourceDir = existsSync(join(root, 'juice-shop'))
-      ? join(root, 'juice-shop')
-      : root;
-
-    let projectName: string | undefined;
-    try {
-      const pkgPath = join(sourceDir, 'package.json');
-      if (existsSync(pkgPath)) {
-        const pkg = JSON.parse(await readFile(pkgPath, 'utf-8'));
-        if (typeof pkg.name === 'string' && pkg.name.trim()) {
-          // SonarQube project keys only allow letters, numbers, '-', '_',
-          // '.', ':' - an npm scoped name like "@org/pkg" would otherwise
-          // be rejected outright by the SAST stage.
-          projectName = pkg.name.trim().replace(/[^a-zA-Z0-9._-]/g, '-');
-        }
-      }
+      return (await this.runDetect(['targets', '--root', PATHS.target])) as DetectedTarget;
     } catch (err) {
-      this.logger.warn(`Could not read package.json for target detection: ${err}`);
+      this.logger.warn(`Target detection failed: ${err}`);
+      return { sourceDir: '', hasDockerfile: false, iacCandidates: [] };
     }
+  }
 
-    const iacFolder = IAC_CANDIDATES.map((d) => (d === '.' ? sourceDir : join(sourceDir, d)))
-      .find((d) => hasTerraform(d));
-
-    return {
-      sourceDir,
-      projectName,
-      hasDockerfile: existsSync(join(sourceDir, 'Dockerfile')),
-      ...(iacFolder ? { iacDir: iacFolder } : {}),
-    };
+  /** Checks a path typed in Settings before a scan finds out it was wrong. */
+  async checkPath(kind: string, path: string): Promise<PathCheck> {
+    if (kind !== 'iac' && kind !== 'source') {
+      return { ok: false, level: 'error', message: 'kind must be "iac" or "source".' };
+    }
+    try {
+      return (await this.runDetect(['check', '--kind', kind, '--path', path ?? ''])) as PathCheck;
+    } catch (err) {
+      this.logger.warn(`Path check failed: ${err}`);
+      return { ok: true, level: 'info', message: 'Could not check this path right now.' };
+    }
   }
 
   /**

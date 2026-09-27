@@ -301,23 +301,22 @@ than setting keys as environment variables — the dashboard's Settings page
 only ever *reports* what Boto3 already resolved, matching the project's "no
 credentials in the product" posture described below.
 
-**Scanning your own project in this mode, without a clone.** The engine is
-already inside the image, so the scanners only need two host paths: the project
-(`/target`) and an empty folder for results, mounted at `/workspace/findings`
-with `HOST_WORKSPACE` set to the folder above it:
+**Scanning your own project in this mode, without a clone.** Run it from the
+project's folder; on start the container reads its own mounts for the host paths
+and detects what to scan (source, Terraform/CloudFormation/CDK folders, project
+name - see `aiops_engine/target_detect.py`), labelled *Detected* in Settings:
 
 ```bash
 docker run -d --name threatweave \
-  -p 3000:80 -p 4000:4000 -p 8080:8080 -p 9000:9000 \
+  -p 3000:80 -p 8080:8080 \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v threatweave-jenkins-home:/var/jenkins_home \
-  -v /path/to/threatweave-data/findings:/workspace/findings \
-  -v /path/to/your-project:/target:ro \
-  -e HOST_WORKSPACE=/path/to/threatweave-data \
-  -e TARGET_PATH=/path/to/your-project \
-  -e SCAN_SOURCE_DIR=/target -e SCAN_IAC_DIR=/target/infra \
+  -v "$PWD:/target:ro" \
+  -v "$HOME/threatweave-data/findings:/workspace/findings" \
   saeedalameri/threatweave:latest
 ```
+
+Any detected value can be overridden with `-e HOST_WORKSPACE=… TARGET_PATH=…
+SCAN_SOURCE_DIR=… SCAN_IAC_DIR=… SCAN_IMAGE=… SCAN_SONAR_KEY=…` or in Settings.
 
 The clone-based form below remains the way to run ThreatWeave's own engine code
 from a working copy.

@@ -117,6 +117,16 @@ describe('api', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/aws/credentials', expect.objectContaining({ method: 'DELETE' }));
   });
 
+  it('checkPath asks the API about a typed path, encoding spaces', async () => {
+    const fetchMock = mockFetchOnce(200, { ok: true, level: 'ok', message: 'Found 3 CDK templates.' });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await api.checkPath('iac', '/target/my infra');
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/settings/check-path?kind=iac&path=%2Ftarget%2Fmy%20infra', expect.anything());
+    expect(result.level).toBe('ok');
+  });
+
   it('runPipeline sends a POST to /api/pipeline/run', async () => {
     const fetchMock = mockFetchOnce(200, { state: 'queued' });
     globalThis.fetch = fetchMock as unknown as typeof fetch;

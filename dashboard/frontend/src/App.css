@@ -791,3 +791,17 @@ a.cve-chip:hover { background: #dfe2fd; }
 .scan-setup .mono { background: #fff; padding: 1px 5px; border-radius: 4px; font-size: 12px; word-break: break-all; }
 .scan-setup p { color: var(--muted); font-size: 12.5px; }
 .skip-tag { font-size: 10.5px; font-weight: 600; color: #96690a; background: #fef6e7; border-radius: 999px; padding: 1px 8px; margin-left: 6px; vertical-align: middle; }
+
+/* Pipeline target: where values came from, detected IaC folders, path checks */
+.origin-tag { font-size: 10.5px; font-weight: 600; border-radius: 999px; padding: 1px 8px; margin-left: 6px; vertical-align: middle; }
+.origin-detected { background: #eef2ff; color: #4338ca; }
+.origin-saved { background: #ecfaf1; color: #0f7a3d; }
+.origin-install { background: #f1f3f5; color: #525866; }
+.iac-candidates { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -4px 0 10px; font-size: 12px; color: var(--muted); }
+.iac-chip { font: inherit; font-size: 12px; border: 1px solid var(--border); background: var(--surface); border-radius: 999px; padding: 3px 10px; cursor: pointer; color: var(--text); }
+.iac-chip:hover { border-color: var(--brand); }
+.iac-chip.active { border-color: var(--brand); background: #eef2ff; color: #4338ca; }
+.path-check { font-size: 12px; margin: -4px 0 12px; line-height: 1.5; }
+.path-check-ok { color: var(--good); }
+.path-check-warn { color: #96690a; }
+.path-check-error { color: var(--crit); }

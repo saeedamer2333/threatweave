@@ -78,43 +78,62 @@ access block and default encryption, IAM `AdministratorAccess` and extra access 
 
 ## Scan your own project
 
-No clone needed: everything ThreatWeave runs is inside the image. The scanners run as
-sibling containers through the Docker socket, so they need two **host** paths: your
-project, and an empty folder for results (Docker creates it).
+Run this from your project's folder. Nothing else to configure: on start, ThreatWeave
+reads its own mounts to find the host paths, and looks inside your project for what to
+scan.
 
 ```bash
 docker run -d --name threatweave \
-  -p 3000:80 -p 4000:4000 -p 8080:8080 -p 9000:9000 \
+  -p 3000:80 -p 8080:8080 \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v threatweave-jenkins-home:/var/jenkins_home \
-  -v /path/to/threatweave-data/findings:/workspace/findings \
-  -v /path/to/your-project:/target:ro \
-  -v ~/.aws:/root/.aws:ro -v ~/.aws:/var/jenkins_home/.aws:ro \
-  -e HOST_WORKSPACE=/path/to/threatweave-data \
-  -e TARGET_PATH=/path/to/your-project \
-  -e SCAN_SOURCE_DIR=/target \
-  -e SCAN_IAC_DIR=/target/infra \
-  -e SCAN_IMAGE=myapp:latest \
-  -e SCAN_SONAR_KEY=my-app \
-  -e JENKINS_ADMIN_PASSWORD=change-me \
+  -v "$PWD:/target:ro" \
+  -v "$HOME/threatweave-data/findings:/workspace/findings" \
+  -v "$HOME/.aws:/root/.aws:ro" -v "$HOME/.aws:/var/jenkins_home/.aws:ro" \
   saeedalameri/threatweave:latest
 ```
 
-Then open http://localhost:3000 and click **Run scan**. Notes:
+Windows PowerShell:
 
-- `HOST_WORKSPACE` is the folder **above** `findings`; results are written to
-  `<HOST_WORKSPACE>/findings`. Keep it outside your project.
-- `SCAN_*` lines are optional: leave any out (or set it later in **Settings → Pipeline
-  target**, which also detects the mounted project) and that scanner is skipped.
-  AWS CDK projects: point `SCAN_IAC_DIR` at the synthesized templates, e.g.
-  `/target/infra/cdk.out` after `cdk synth`.
-- The `.aws` lines are optional: drop them to skip the cloud checks, or enter a key in
-  Settings instead.
-- The project must be a Git repository (GitLeaks reads its history).
-- Scanning several projects: one container per project, each with its own name, results
-  folder and ports (e.g. 3100, 4100, 8180, 9100).
-- On Windows (PowerShell), use forward slashes in paths (`D:/projects/my-app`), end lines
-  with a backtick instead of `\`, and use `$env:USERPROFILE\.aws` for `~/.aws`.
+```powershell
+docker run -d --name threatweave `
+  -p 3000:80 -p 8080:8080 `
+  -v /var/run/docker.sock:/var/run/docker.sock `
+  -v "${PWD}:/target:ro" `
+  -v "D:/threatweave-data/findings:/workspace/findings" `
+  -v "$env:USERPROFILE\.aws:/root/.aws:ro" -v "$env:USERPROFILE\.aws:/var/jenkins_home/.aws:ro" `
+  saeedalameri/threatweave:latest
+```
+
+Open http://localhost:3000 and click **Run scan**.
+
+**What it detects** (shown in Settings → Pipeline target, each value labelled *Detected*):
+
+| Target | How |
+|---|---|
+| Code for GitLeaks and SonarQube | the mounted folder (`/target`) |
+| Infrastructure code for Checkov | every folder with Terraform (`*.tf`), CloudFormation, or AWS CDK output (`cdk.out`), wherever it lives; the largest is used and the rest are one click away |
+| Project name for SonarQube | `package.json`, else the folder name |
+| Host paths the scanners need | this container's own mounts |
+| Container image for Trivy | never guessed: add `-e SCAN_IMAGE=myapp:latest`, or set it in Settings |
+
+Anything can be overridden with `-e SCAN_SOURCE_DIR=… SCAN_IAC_DIR=… SCAN_IMAGE=…
+SCAN_SONAR_KEY=…`, or in Settings, where typed paths are checked before a scan runs and
+your choice is kept. An empty value skips that scanner.
+
+Notes:
+
+- **Results** go to the folder mounted at `/workspace/findings`. Keep it outside your
+  project. Add `-v threatweave-jenkins-home:/var/jenkins_home` to keep Jenkins' build
+  history if you recreate the container.
+- **AWS:** the `.aws` lines are optional. Drop them to skip the cloud checks, or enter a
+  read-only key in Settings instead.
+- **Git:** the project must be a Git repository (GitLeaks reads its history).
+- **CDK:** run `cdk synth` first so `cdk.out` holds current templates.
+- **Memory:** SonarQube needs about 3 GB; add `-e SONARQUBE_AUTOSTART=false` to skip it.
+- **Several projects:** one container per project, each with its own name, results folder
+  and ports (e.g. `-p 3100:80 -p 8180:8080`).
+- **Other ports:** add `-p 4000:4000` for the API or `-p 9000:9000` for SonarQube's own UI.
+- **Jenkins login:** `admin` / `admin` unless you add `-e JENKINS_ADMIN_PASSWORD=…`.
 - Dismissed findings are kept while the container exists; they are not carried over if you
   remove and recreate it.
 
@@ -146,7 +165,7 @@ Suppression rules start empty: analysts create them with **Dismiss** on a findin
 
 | Tag | What it is |
 |---|---|
-| `latest`, `2026-09-27` | Current: scan targets start empty (or from `SCAN_*`), a guided setup in Settings, no bundled suppression rules, and upgrades keep the pipeline current |
+| `latest`, `2026-09-27` | Current: detects host paths and scan targets (Terraform, CloudFormation, CDK) automatically, checks typed paths in Settings, no bundled suppression rules, and upgrades keep the pipeline current |
 | `2026-09-26` | Session AWS keys in Settings, a read-only policy guide, live per-scanner progress |
 | `2026-08-31` | Version submitted with the final-year project report |
 

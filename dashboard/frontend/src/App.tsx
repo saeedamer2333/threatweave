@@ -520,7 +520,7 @@ function Content({ view, data, onGoto, onReload, scan, elapsedLabel, asyncSonarS
             even though the sidebar's own spinner/elapsed timer confirmed it
             was. Only the per-tool chip row genuinely needs prior data. */}
         {(data.sources || scan || asyncSonarScan?.scanning) && (
-          <DataSources sources={data.sources ?? []} scan={scan} elapsedLabel={elapsedLabel} asyncSonarScan={asyncSonarScan} />
+          <DataSources sources={data.sources ?? []} scan={scan} elapsedLabel={elapsedLabel} asyncSonarScan={asyncSonarScan} onOpenSettings={() => onGoto('settings')} />
         )}
         <section className="grid">
           <div className={`card health ${health.cls}`}>
@@ -946,10 +946,13 @@ function SettingsPanel({ data, onReload }: { data: AiopsOutput; onReload: () => 
           </div>
           <div className="sonar-crash-body">
             <strong>
-              {sonarStatus.crashReason === 'oom' ? 'SonarQube ran out of memory and stopped' : 'SonarQube stopped responding'}
+              {sonarStatus.didNotStart ? 'SonarQube did not start - SAST is off'
+                : sonarStatus.crashReason === 'oom' ? 'SonarQube ran out of memory and stopped' : 'SonarQube stopped responding'}
             </strong>
             <p>
-              {sonarStatus.crashReason === 'oom'
+              {sonarStatus.didNotStart
+                ? `${sonarStatus.message ?? 'SonarQube did not start.'} GitLeaks, Trivy, Checkov and the AWS checks are unaffected - only SAST results are missing.${sonarStatus.didNotStart === 'timeout' ? ' This is almost always too little memory for SonarQube.' : ''}`
+                : sonarStatus.crashReason === 'oom'
                 ? "This container's SonarQube (bundled for SAST) used more memory than the host could give it and was killed. The rest of the pipeline (GitLeaks, Trivy, Checkov) is unaffected — only SAST results are missing until this is fixed."
                 : (sonarStatus.message ?? 'SonarQube is not reachable right now.')}
             </p>
@@ -1157,22 +1160,24 @@ function PipelineTargetCard({ settings, save, saving }: {
     save({ pipeline: { [key]: value } as never });
 
   // Typed paths are checked right away, instead of a scan finding out later.
-  const [pathChecks, setPathChecks] = useState<{ sourceDir?: PathCheck; iacDir?: PathCheck }>({});
-  const checkField = (field: 'sourceDir' | 'iacDir', value: string) => {
-    api.checkPath(field === 'iacDir' ? 'iac' : 'source', value)
+  const [pathChecks, setPathChecks] = useState<{ sourceDir?: PathCheck; iacDir?: PathCheck; targetImage?: PathCheck }>({});
+  const checkField = (field: 'sourceDir' | 'iacDir' | 'targetImage', value: string) => {
+    api.checkPath(field === 'iacDir' ? 'iac' : field === 'targetImage' ? 'image' : 'source', value)
       .then((r) => setPathChecks((prev) => ({ ...prev, [field]: r })))
       .catch(() => {});
   };
   useEffect(() => {
     if (p.sourceDir) checkField('sourceDir', p.sourceDir);
     if (p.iacDir) checkField('iacDir', p.iacDir);
-  }, [p.sourceDir, p.iacDir]);
+    if (p.targetImage) checkField('targetImage', p.targetImage);
+    else setPathChecks((prev) => ({ ...prev, targetImage: undefined }));
+  }, [p.sourceDir, p.iacDir, p.targetImage]);
 
   const origin = (field: 'sourceDir' | 'iacDir' | 'targetImage' | 'sonarProjectKey') => {
     const label = originLabel(settings.pipelineOrigin?.[field]);
     return label && <span className={`origin-tag origin-${settings.pipelineOrigin?.[field]}`} title={label.title}>{label.text}</span>;
   };
-  const checkLine = (field: 'sourceDir' | 'iacDir') => {
+  const checkLine = (field: 'sourceDir' | 'iacDir' | 'targetImage') => {
     const c = pathChecks[field];
     if (!c || c.level === 'info') return null;
     const icon = c.level === 'ok' ? '✓' : c.level === 'warn' ? '⚠' : '✗';
@@ -1187,14 +1192,15 @@ function PipelineTargetCard({ settings, save, saving }: {
   const [dismissed, setDismissed] = useState(false);
   useEffect(() => { api.detectTarget().then(setDetected).catch(() => {}); }, []);
 
-  const suggestedTargetImage = detected?.hasDockerfile ? undefined : '';
+  // The container image is never part of the suggestion: an image can come
+  // from a registry or be built elsewhere, so a project without a Dockerfile
+  // is no reason to clear one the user typed.
   // Only a real mounted project is worth suggesting; an empty sourceDir from
   // detection means nothing is mounted at /target.
   const suggestionDiffers = detected && detected.sourceDir && !dismissed && (
     detected.sourceDir !== p.sourceDir ||
     (detected.iacDir && detected.iacDir !== p.iacDir) ||
-    (detected.projectName && detected.projectName !== p.sonarProjectKey) ||
-    (suggestedTargetImage === '' && p.targetImage !== '')
+    (detected.projectName && detected.projectName !== p.sonarProjectKey)
   );
 
   const applyDetected = () => {
@@ -1202,7 +1208,6 @@ function PipelineTargetCard({ settings, save, saving }: {
     const patch: Partial<typeof p> = { sourceDir: detected.sourceDir };
     if (detected.projectName) patch.sonarProjectKey = detected.projectName;
     if (detected.iacDir) patch.iacDir = detected.iacDir;
-    if (!detected.hasDockerfile && p.targetImage) patch.targetImage = '';
     save({ pipeline: patch as never });
     setDismissed(true);
   };
@@ -1245,7 +1250,7 @@ function PipelineTargetCard({ settings, save, saving }: {
             <strong>{p.sourceDir ? 'Detected a different project mounted at /target' : 'Found a project mounted at /target'}</strong>
             <span>
               {detected!.projectName ? `Found "${detected!.projectName}" (from its package.json)` : 'Found a project'}
-              {detected!.hasDockerfile ? ' with its own Dockerfile.' : ' with no Dockerfile - Container image would be cleared.'}
+              {detected!.hasDockerfile ? ' with its own Dockerfile - build its image, then set it under Container image.' : '.'}
               {detected!.iacDir ? ` Infrastructure code found in ${detected!.iacDir}.` : ''}
               {' '}Apply these as the real scan target?
             </span>
@@ -1321,6 +1326,7 @@ function PipelineTargetCard({ settings, save, saving }: {
           placeholder="leave blank to skip Trivy"
         />
       </label>
+      {checkLine('targetImage')}
 
       <label className="set-row hinted">
         <span className="set-label-group">
@@ -1393,11 +1399,17 @@ const STAGE_TO_SOURCE: Record<string, string> = {
   // The AWS monitor has no stage of its own - see isAwsMonitorRunning.
 };
 
-function DataSources({ sources, scan, elapsedLabel, asyncSonarScan }: {
+function DataSources({ sources, scan, elapsedLabel, asyncSonarScan, onOpenSettings }: {
   sources: SourceStatus[]; scan?: PipelineStatus | null; elapsedLabel?: string | null;
-  asyncSonarScan?: AsyncSonarScanStatus | null;
+  asyncSonarScan?: AsyncSonarScanStatus | null; onOpenSettings?: () => void;
 }) {
-  const missingOrError = sources.filter((s) => s.status !== 'ok');
+  const label = (s: SourceStatus) => SOURCE_LABELS[s.source] ?? s.source;
+  const failed = sources.filter((s) => s.status === 'failed');
+  // "not configured" is fixed in Settings; any other skip reason is not.
+  const skipped = sources.filter((s) => s.status === 'skipped' && (s.detail ?? 'not configured') === 'not configured');
+  const turnedOff = sources.filter((s) => s.status === 'skipped' && !skipped.includes(s));
+  const stale = sources.filter((s) => s.status === 'stale');
+  const unexplained = sources.filter((s) => s.status === 'missing' || s.status === 'error');
   // The scanners run as parallel branches (see the Jenkinsfile), so more
   // than one is often genuinely active at once - every chip touched so far
   // this run is highlighted, not just whichever produced the most recent
@@ -1482,7 +1494,10 @@ function DataSources({ sources, scan, elapsedLabel, asyncSonarScan }: {
                 running ? 'Scanning now - the count shown is still from the last completed run'
                   : s.status === 'ok' ? `${s.findings} findings`
                     : s.status === 'error' ? `Report was present but could not be read: ${s.detail ?? 'unknown error'}`
-                      : 'No report was produced for this run - the scanner may be disabled, not configured, or its stage failed'
+                      : s.status === 'skipped' ? ((s.detail ?? 'not configured') === 'not configured' ? 'Skipped - no target is set for this scanner in Settings → Pipeline target' : `Skipped - ${s.detail}`)
+                        : s.status === 'failed' ? `The scanner failed this run: ${s.detail ?? 'see the Jenkins log'}`
+                          : s.status === 'stale' ? `${s.findings} findings reused from an earlier scan of this project - this run's own scan did not finish`
+                            : 'No report was produced for this run - the scanner may be disabled, not configured, or its stage failed'
               }
             >
               <span className="source-dot" />
@@ -1491,6 +1506,9 @@ function DataSources({ sources, scan, elapsedLabel, asyncSonarScan }: {
               {!running && s.status === 'ok' && <span className="source-count">{s.findings}</span>}
               {!running && s.status === 'missing' && <span className="source-reason">no report</span>}
               {!running && s.status === 'error' && <span className="source-reason">unreadable</span>}
+              {!running && s.status === 'skipped' && <span className="source-reason">{skipped.includes(s) ? 'skipped – not set' : 'off'}</span>}
+              {!running && s.status === 'failed' && <span className="source-reason">failed</span>}
+              {!running && s.status === 'stale' && <><span className="source-count">{s.findings}</span><span className="source-reason">carried over</span></>}
             </span>
           );
         })}
@@ -1502,14 +1520,34 @@ function DataSources({ sources, scan, elapsedLabel, asyncSonarScan }: {
           and will update once this one finishes.
         </p>
       )}
-      {!scan && missingOrError.length > 0 && (
+      {!scan && failed.map((s) => (
+        <p key={s.source} className="sources-note sources-note-failed">
+          <strong>{label(s)} failed this run:</strong> {s.detail ?? 'see the Jenkins log'}. The other
+          scanners still ran, and the numbers below use their results.
+        </p>
+      ))}
+      {!scan && stale.length > 0 && (
+        <p className="sources-note sources-note-stale">
+          {stale.map(label).join(', ')} results are <strong>carried over from an earlier scan</strong> of
+          this project - this run's own scan did not finish, so recent code changes may not be reflected yet.
+        </p>
+      )}
+      {!scan && skipped.length > 0 && (
         <p className="sources-note">
-          This run's numbers only reflect the sources marked above as having
-          findings - {missingOrError.map((s) => SOURCE_LABELS[s.source] ?? s.source).join(', ')} did
-          not contribute data to it. That is not necessarily a problem (SAST
-          is off unless <code>SONAR_HOST_URL</code> is set, for instance) but
-          it does mean the health score and finding counts below are based on
-          fewer than five sources this time.
+          {skipped.map(label).join(', ')} {skipped.length === 1 ? 'was' : 'were'} skipped because no
+          target is set.{' '}
+          {onOpenSettings && <button type="button" className="link-btn" onClick={onOpenSettings}>Set it in Settings →</button>}
+        </p>
+      )}
+      {!scan && turnedOff.map((s) => (
+        <p key={s.source} className="sources-note">{label(s)} was skipped: {s.detail}.</p>
+      ))}
+      {!scan && unexplained.length > 0 && (
+        <p className="sources-note">
+          {unexplained.map(label).join(', ')} did not contribute data to this run. That is not
+          necessarily a problem (SAST is off unless <code>SONAR_HOST_URL</code> is set, for
+          instance) but it does mean the health score and finding counts below are based on
+          fewer sources this time.
         </p>
       )}
     </section>

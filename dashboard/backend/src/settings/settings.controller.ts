@@ -15,7 +15,7 @@ export class SettingsController {
     return this.settings.detectTarget();
   }
 
-  /** Confirms a typed path: ?kind=iac|source&path=/target/... */
+  /** Confirms a typed path or image name: ?kind=iac|source|image&path=... */
   @Get('check-path')
   checkPath(@Query('kind') kind: string, @Query('path') path: string) {
     return this.settings.checkPath(kind, path);

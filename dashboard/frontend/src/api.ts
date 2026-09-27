@@ -131,6 +131,8 @@ export interface SonarQubeStatus {
   relevant: boolean;
   healthy: boolean;
   crashReason?: 'oom' | 'other';
+  /** SonarQube never came up this boot, so SAST is off until a restart. */
+  didNotStart?: 'timeout' | 'token';
   message?: string;
 }
 
@@ -172,7 +174,7 @@ export const api = {
   updateSettings: (body: Partial<AppSettings>) =>
     request<AppSettings>('/settings', { method: 'PUT', body: JSON.stringify(body) }),
   detectTarget: () => request<DetectedTarget>('/settings/detect-target'),
-  checkPath: (kind: 'iac' | 'source', path: string) =>
+  checkPath: (kind: 'iac' | 'source' | 'image', path: string) =>
     request<PathCheck>(`/settings/check-path?kind=${kind}&path=${encodeURIComponent(path)}`),
   getSonarQubeStatus: () => request<SonarQubeStatus>('/settings/sonarqube-status'),
   getAsyncSonarScanStatus: () => request<AsyncSonarScanStatus>('/settings/sonarqube-scan-status'),

@@ -293,6 +293,16 @@ describe('SettingsService', () => {
       expect(result.level).toBe('error');
     });
 
+    it('checks a container image name through the same script', async () => {
+      pythonAnswers(JSON.stringify({ ok: true, level: 'ok', message: 'myapp:latest is built on this machine.' }));
+
+      const result = await service.checkPath('image', 'myapp:latest');
+
+      const [, args] = mockExecFile.mock.calls[0] as unknown as [string, string[]];
+      expect(args.slice(1)).toEqual(['check', '--kind', 'image', '--path', 'myapp:latest']);
+      expect(result.level).toBe('ok');
+    });
+
     it('rejects an unknown kind without running anything', async () => {
       const result = await service.checkPath('rm -rf', '/target');
 
@@ -398,14 +408,35 @@ describe('SettingsService', () => {
       expect(result).toEqual({ relevant: false, healthy: false });
     });
 
-    it('is not relevant when the marker was written empty (autoconfig never confirmed SonarQube up)', async () => {
+    it('is not relevant when the marker was written empty without a failure reason', async () => {
       process.env.SONARQUBE_AUTOSTART = 'true';
-      mockExistsSync.mockReturnValue(true);
+      mockExistsSync.mockImplementation((p) => !(p as string).endsWith('.sonar-failed'));
       mockReadFile.mockResolvedValue('' as never);
 
       const result = await service.checkSonarQubeStatus();
 
       expect(result).toEqual({ relevant: false, healthy: false });
+    });
+
+    it('reports that SonarQube did not start when autoconfig gave up waiting', async () => {
+      process.env.SONARQUBE_AUTOSTART = 'true';
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockImplementation(async (p) => ((p as string).endsWith('.sonar-failed') ? 'timeout' : '') as never);
+
+      const result = await service.checkSonarQubeStatus();
+
+      expect(result).toMatchObject({ relevant: true, healthy: false, didNotStart: 'timeout' });
+      expect(result.message).toMatch(/did not start within 5 minutes/);
+    });
+
+    it('reports a token failure separately from a boot timeout', async () => {
+      process.env.SONARQUBE_AUTOSTART = 'true';
+      mockExistsSync.mockReturnValue(true);
+      mockReadFile.mockImplementation(async (p) => ((p as string).endsWith('.sonar-failed') ? 'token' : '') as never);
+
+      const result = await service.checkSonarQubeStatus();
+
+      expect(result.didNotStart).toBe('token');
     });
 
     it('reports healthy when SonarQube responds UP after having been confirmed up once', async () => {

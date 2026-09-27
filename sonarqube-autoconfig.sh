@@ -14,7 +14,10 @@
 set -e
 
 ENV_FILE=/var/jenkins_home/.sonar-env
+# Why SAST is off this boot, for the dashboard's Settings banner.
+FAILED_FILE=/var/jenkins_home/.sonar-failed
 SONAR_URL="http://localhost:9000"
+rm -f "$FAILED_FILE"
 
 if [ "${SONARQUBE_AUTOSTART:-true}" != "true" ]; then
     : > "$ENV_FILE"
@@ -28,6 +31,7 @@ until curl -sf "$SONAR_URL/api/system/status" 2>/dev/null | grep -q '"status":"U
     sleep 5; waited=$((waited + 5))
     if [ "$waited" -ge 300 ]; then
         echo "SonarQube did not become ready within 5 minutes - leaving SAST off for this boot."
+        echo "timeout" > "$FAILED_FILE"
         : > "$ENV_FILE"
         exec sleep infinity
     fi
@@ -58,12 +62,14 @@ fi
 TOKEN_JSON="$(curl -sf -u "admin:$NEW_PASSWORD" -X POST "$SONAR_URL/api/user_tokens/generate" \
     --data-urlencode "name=threatweave-pipeline-$(date +%s)" 2>/dev/null)" || {
     echo "Could not generate a token - leaving SAST off for this boot."
+    echo "token" > "$FAILED_FILE"
     : > "$ENV_FILE"
     exec sleep infinity
 }
 TOKEN="$(printf '%s' "$TOKEN_JSON" | grep -o '"token":"[^"]*"' | cut -d'"' -f4)"
 if [ -z "$TOKEN" ]; then
     echo "Unexpected response generating the token - leaving SAST off for this boot."
+    echo "token" > "$FAILED_FILE"
     : > "$ENV_FILE"
     exec sleep infinity
 fi

@@ -107,7 +107,9 @@ export interface HistoryPoint {
 export interface SourceStatus {
   source: string;
   file: string;
-  status: 'ok' | 'missing' | 'error';
+  /** skipped: not configured; failed: the scanner stage failed (see detail);
+   * stale: a report carried over from an earlier scan of the same project. */
+  status: 'ok' | 'missing' | 'error' | 'skipped' | 'failed' | 'stale';
   findings: number;
   detail?: string;
 }

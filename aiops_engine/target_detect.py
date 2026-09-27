@@ -5,15 +5,16 @@ One implementation used in three places, so they can never disagree:
   startup-env   The all-in-one image's entrypoint runs this before Jenkins and
                 the API start. It prints `export` lines for anything the user
                 did not pass themselves:
-                  - HOST_WORKSPACE / TARGET_PATH, read from this container's own
+                  - HOST_WORKSPACE / HOST_FINDINGS / TARGET_PATH, read from this container's own
                     mounts through the Docker socket (scanners run as sibling
                     containers, so they need real host paths);
                   - SCAN_SOURCE_DIR / SCAN_IAC_DIR / SCAN_SONAR_KEY, detected
                     from the project mounted at /target.
                 A value the user passed with -e always wins, even an empty one.
   targets       Used by the dashboard's Settings page to suggest values.
-  check         Used by the Settings page to confirm a typed path before a
-                ten-minute scan finds out it was wrong.
+  check         Used by the Settings page to confirm a typed path, or a
+                container image name, before a ten-minute scan finds out it
+                was wrong.
 
 Detection never guesses a container image: an image name cannot be derived
 from source code, so SCAN_IMAGE is only ever set by the user.
@@ -22,6 +23,7 @@ Usage:
     python target_detect.py startup-env
     python target_detect.py targets [--root /target]
     python target_detect.py check --kind iac|source --path /target/infra
+    python target_detect.py check --kind image --path myapp:latest
 """
 from __future__ import annotations
 
@@ -33,6 +35,7 @@ import re
 import shlex
 import socket
 import sys
+from urllib.parse import quote
 from pathlib import Path, PurePosixPath
 
 TARGET = "/target"
@@ -69,6 +72,19 @@ class _UnixHTTPConnection(http.client.HTTPConnection):
         self.sock.connect(self._path)
 
 
+def _docker_get(path: str, socket_path: str = DOCKER_SOCKET, timeout: float = 5.0) -> int:
+    """HTTP status of a GET against the Docker Engine API (0 if unreachable)."""
+    try:
+        conn = _UnixHTTPConnection(socket_path, timeout=timeout)
+        conn.request("GET", path)
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        return resp.status
+    except (OSError, http.client.HTTPException):
+        return 0
+
+
 def own_mounts(socket_path: str = DOCKER_SOCKET) -> list[dict]:
     """This container's mounts, from the Docker Engine API. The hostname is the
     container's short ID unless --hostname was given; fall back to scanning
@@ -94,11 +110,14 @@ def own_mounts(socket_path: str = DOCKER_SOCKET) -> list[dict]:
 
 
 def host_paths(mounts: list[dict]) -> dict[str, str]:
-    """HOST_WORKSPACE and TARGET_PATH from the mounts, when they can be known.
+    """HOST_WORKSPACE, HOST_FINDINGS and TARGET_PATH from the mounts, when
+    they can be known.
 
     HOST_WORKSPACE is the host folder behind /workspace: either /workspace
     itself (a clone of the repository) or the parent of a folder mounted at
     /workspace/findings (results only - the engine is already in the image).
+    HOST_FINDINGS is the results folder itself, which need not be called
+    "findings" on the host - scanners write their reports into it.
     """
     by_dest = {m.get("Destination"): to_host_path(m.get("Source", "")) for m in mounts
                if m.get("Source")}
@@ -107,6 +126,8 @@ def host_paths(mounts: list[dict]) -> dict[str, str]:
         out["HOST_WORKSPACE"] = by_dest[WORKSPACE]
     elif FINDINGS in by_dest:
         out["HOST_WORKSPACE"] = str(PurePosixPath(by_dest[FINDINGS]).parent)
+    if FINDINGS in by_dest:
+        out["HOST_FINDINGS"] = by_dest[FINDINGS]
     if TARGET in by_dest:
         out["TARGET_PATH"] = by_dest[TARGET]
     return out
@@ -286,8 +307,37 @@ def check_path(kind: str, path: str, allowed: tuple[str, ...] = (TARGET, WORKSPA
         return {"ok": True, "level": "warn", "message": f"{p} is empty - nothing to scan."}
     if not (real / ".git").exists() and not any((a / ".git").exists() for a in real.parents):
         return {"ok": True, "level": "warn",
-                "message": f"{p} is not in a Git repository - SonarQube will scan it, but GitLeaks needs Git history."}
+                "message": f"{p} is not in a Git repository - SonarQube will scan it, but GitLeaks needs Git history, "
+                           "and automatic runs cannot tell when the code changed. If the repository root is a parent "
+                           "folder, start ThreatWeave from that folder instead so its .git is mounted too."}
     return {"ok": True, "level": "ok", "message": f"{p} looks good."}
+
+
+IMAGE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$")
+
+
+def check_image(name: str, docker_get=_docker_get) -> dict:
+    """Can Trivy get this image? Local first, then the registry, the same
+    order the pipeline uses (docker image inspect, then docker pull)."""
+    n = name.strip()
+    if not n:
+        return {"ok": True, "level": "info", "message": "Empty: Trivy is skipped."}
+    if not IMAGE_NAME.match(n):
+        return {"ok": False, "level": "error", "message": f"{n} is not a valid image name, e.g. myapp:latest."}
+    ref = quote(n, safe="/:@")
+    local = docker_get(f"/images/{ref}/json")
+    if local == 200:
+        return {"ok": True, "level": "ok", "message": f"{n} is built on this machine - Trivy will scan it."}
+    if local == 0:
+        return {"ok": True, "level": "info", "message": "Docker is not reachable from here, so the image cannot be checked."}
+    # Asks the registry for the manifest without pulling anything.
+    remote = docker_get(f"/distribution/{ref}/json", timeout=15.0)
+    if remote == 200:
+        return {"ok": True, "level": "warn",
+                "message": f"{n} is not built on this machine, but exists in a registry - it will be pulled at scan time."}
+    return {"ok": False, "level": "error",
+            "message": f"{n} was not found on this machine or in a public registry. Build it first "
+                       f"(docker build -t {n} .) or check the name - otherwise Trivy will fail."}
 
 
 # ------------------------------------------------------------------ startup
@@ -299,7 +349,7 @@ def startup_env(environ: dict | None = None, mounts: list[dict] | None = None,
     env = os.environ if environ is None else environ
     out: dict[str, str] = {}
 
-    missing_paths = [k for k in ("HOST_WORKSPACE", "TARGET_PATH") if k not in env]
+    missing_paths = [k for k in ("HOST_WORKSPACE", "HOST_FINDINGS", "TARGET_PATH") if k not in env]
     if missing_paths:
         found = host_paths(own_mounts() if mounts is None else mounts)
         for k in missing_paths:
@@ -332,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
     t = sub.add_parser("targets")
     t.add_argument("--root", default=TARGET)
     c = sub.add_parser("check")
-    c.add_argument("--kind", choices=("iac", "source"), required=True)
+    c.add_argument("--kind", choices=("iac", "source", "image"), required=True)
     c.add_argument("--path", required=True)
     args = ap.parse_args(argv)
 
@@ -346,6 +396,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[threatweave] {key}={value}", file=sys.stderr)
     elif args.cmd == "targets":
         print(json.dumps(detect_targets(args.root, os.environ.get("TARGET_PATH", ""))))
+    elif args.kind == "image":
+        print(json.dumps(check_image(args.path)))
     else:
         print(json.dumps(check_path(args.kind, args.path)))
     return 0

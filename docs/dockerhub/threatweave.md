@@ -114,7 +114,7 @@ Open http://localhost:3000 and click **Run scan**.
 | Infrastructure code for Checkov | every folder with Terraform (`*.tf`), CloudFormation, or AWS CDK output (`cdk.out`), wherever it lives; the largest is used and the rest are one click away |
 | Project name for SonarQube | `package.json`, else the folder name |
 | Host paths the scanners need | this container's own mounts |
-| Container image for Trivy | never guessed: add `-e SCAN_IMAGE=myapp:latest`, or set it in Settings |
+| Container image for Trivy | never guessed: build it first (`docker build -t myapp:latest .`), then add `-e SCAN_IMAGE=myapp:latest` or set it in Settings, which checks the name |
 
 Anything can be overridden with `-e SCAN_SOURCE_DIR=… SCAN_IAC_DIR=… SCAN_IMAGE=…
 SCAN_SONAR_KEY=…`, or in Settings, where typed paths are checked before a scan runs and
@@ -127,7 +127,9 @@ Notes:
   history if you recreate the container.
 - **AWS:** the `.aws` lines are optional. Drop them to skip the cloud checks, or enter a
   read-only key in Settings instead.
-- **Git:** the project must be a Git repository (GitLeaks reads its history).
+- **Git:** run the command from the repository root (the folder with `.git`), not a subfolder.
+  GitLeaks reads the history, and the 5-minute automatic runs use it to skip unchanged code;
+  without it, automatic runs are skipped and only **Run scan** scans.
 - **CDK:** run `cdk synth` first so `cdk.out` holds current templates.
 - **Memory:** SonarQube needs about 3 GB; add `-e SONARQUBE_AUTOSTART=false` to skip it.
 - **Several projects:** one container per project, each with its own name, results folder

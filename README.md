@@ -318,6 +318,12 @@ docker run -d --name threatweave \
 Any detected value can be overridden with `-e HOST_WORKSPACE=… TARGET_PATH=…
 SCAN_SOURCE_DIR=… SCAN_IAC_DIR=… SCAN_IMAGE=… SCAN_SONAR_KEY=…` or in Settings.
 
+Run it from the repository root (the folder holding `.git`): GitLeaks needs the
+history, and the 5-minute automatic runs compare commits to skip unchanged code -
+without Git they are skipped, and only **Run scan** scans. Trivy scans an image that
+already exists, so build it first (`docker build -t myapp:latest .`); Settings checks
+the name, and a missing image fails only the Trivy step, not the whole run.
+
 The clone-based form below remains the way to run ThreatWeave's own engine code
 from a working copy.
 

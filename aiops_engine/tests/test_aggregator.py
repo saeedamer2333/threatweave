@@ -105,3 +105,56 @@ def test_source_status_error_on_one_report_does_not_affect_other_sources(tmp_pat
     by_source = {s["source"]: s["status"] for s in sources}
     assert by_source["checkov"] == "error"
     assert by_source["trivy"] == "ok"
+
+
+# ---- scan-status.json: why a source is missing, failed or carried over ----
+
+def test_stage_status_marks_a_skipped_scanner_as_not_configured(tmp_path):
+    _write(tmp_path, "scan-status.json", {"Container - Trivy": "skipped"})
+
+    _, sources = aggregator.load_all(tmp_path)
+
+    trivy = next(s for s in sources if s["source"] == "trivy")
+    assert trivy["status"] == "skipped"
+    assert trivy["detail"] == "not configured"
+
+
+def test_stage_status_keeps_a_skip_reason_that_settings_cannot_fix(tmp_path):
+    _write(tmp_path, "scan-status.json", {"SAST - SonarQube": "skipped: SonarQube is turned off"})
+
+    _, sources = aggregator.load_all(tmp_path)
+
+    sonar = next(s for s in sources if s["source"] == "sonarqube")
+    assert sonar["status"] == "skipped"
+    assert sonar["detail"] == "SonarQube is turned off"
+
+
+def test_stage_status_carries_the_failure_reason_to_the_dashboard(tmp_path):
+    _write(tmp_path, "scan-status.json",
+           {"Container - Trivy": "failed: image myapp:latest not found locally or in a registry"})
+
+    _, sources = aggregator.load_all(tmp_path)
+
+    trivy = next(s for s in sources if s["source"] == "trivy")
+    assert trivy["status"] == "failed"
+    assert "myapp:latest not found" in trivy["detail"]
+
+
+def test_stage_status_marks_a_carried_over_report_as_stale_but_keeps_its_findings(tmp_path):
+    _write(tmp_path, "sonarqube-report.json", {"issues": []})
+    _write(tmp_path, "scan-status.json",
+           {"SAST - SonarQube": "ok (carried over from an earlier scan)"})
+
+    _, sources = aggregator.load_all(tmp_path)
+
+    sonar = next(s for s in sources if s["source"] == "sonarqube")
+    assert sonar["status"] == "stale"
+    assert "carried over" in sonar["detail"]
+
+
+def test_stage_status_file_that_is_unreadable_falls_back_to_report_presence(tmp_path):
+    (tmp_path / "scan-status.json").write_text("{broken", encoding="utf-8")
+
+    _, sources = aggregator.load_all(tmp_path)
+
+    assert all(s["status"] == "missing" for s in sources)

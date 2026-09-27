@@ -70,6 +70,11 @@ def toHostPath(String containerPath) {
     if (containerPath.startsWith('/target')) {
         return containerPath.replaceFirst('^/target', hostTargetPath())
     }
+    // The results folder is mounted on its own and may have any name on the
+    // host, so it is mapped exactly rather than derived from HOST_WORKSPACE.
+    if (env.HOST_FINDINGS?.trim() && containerPath.startsWith('/workspace/findings')) {
+        return containerPath.replaceFirst('^/workspace/findings', env.HOST_FINDINGS)
+    }
     return containerPath.replaceFirst('^/workspace', env.HOST_WORKSPACE)
 }
 
@@ -84,7 +89,7 @@ def toHostPath(String containerPath) {
 def runScanner(String name, String expectedReport, Closure body) {
     try {
         body()
-        if (scanStatus[name] == 'skipped') {
+        if ((scanStatus[name] ?: '').startsWith('skipped')) {
             return
         }
         def size = sh(
@@ -124,6 +129,9 @@ def runAiopsEngine(String phaseLabel) {
     echo "Inputs collected for this run (${phaseLabel}):"
     sh "ls -la ${INPUT_DIR} || true"
     scanStatus.each { name, state -> echo "  ${name}: ${state}" }
+    // The engine reads this to tell the dashboard why a source is missing,
+    // failed or carried over, instead of only saying "no report".
+    writeJSON file: "${INPUT_DIR}/scan-status.json", json: scanStatus
 
     sh """
         cd ${ENGINE_DIR} && python3 engine.py \
@@ -354,6 +362,9 @@ def checkPendingSonarScan() {
 def kickOffSonarScan() {
     if (!env.SONAR_HOST_URL?.trim()) {
         echo 'SONAR_HOST_URL not set - not launching an async SAST scan.'
+        // 'skipped: <reason>' - the dashboard shows the reason, since this is
+        // not something the Pipeline target settings can fix.
+        scanStatus['SAST - SonarQube'] = scanStatus['SAST - SonarQube'] ?: 'skipped: SonarQube is turned off (SONARQUBE_AUTOSTART=false or no SONAR_HOST_URL)'
         return
     }
     def markerExists = sh(script: "[ -f ${sonarPendingMarker()} ] && echo yes || echo no", returnStdout: true).trim()
@@ -492,16 +503,25 @@ pipeline {
                         skipRun = true
                         currentBuild.result = 'NOT_BUILT'
                         currentBuild.description = 'Skipped - no project configured yet'
-                    } else if (isAutoTriggered) {
+                    } else if (hasSourceDir()) {
                         def currentHead = sh(script: "git -C ${SOURCE_DIR} rev-parse HEAD 2>/dev/null || echo ''", returnStdout: true).trim()
                         def markerFile = "${FINDINGS_DIR}/.last-scanned-commit"
                         def lastScanned = sh(script: "cat ${markerFile} 2>/dev/null || echo ''", returnStdout: true).trim()
-                        if (currentHead && currentHead == lastScanned) {
+                        if (isAutoTriggered && !currentHead) {
+                            // Without Git there is no way to tell whether anything
+                            // changed, so every tick would rescan the same files.
+                            echo "${SOURCE_DIR} is not in a Git repository - automatic runs cannot detect new commits, so this one is skipped. Use Run scan instead."
+                            skipRun = true
+                            currentBuild.result = 'NOT_BUILT'
+                            currentBuild.description = 'Skipped - source is not a Git repository (use Run scan)'
+                        } else if (isAutoTriggered && currentHead == lastScanned) {
                             echo "No new commits since the last scan (still at ${currentHead}) - skipping this automatic run."
                             skipRun = true
                             currentBuild.result = 'NOT_BUILT'
                             currentBuild.description = 'Skipped - no new commits since the last scan'
                         } else if (currentHead) {
+                            // Manual runs record the commit too, so the next
+                            // automatic tick does not rescan the same code.
                             sh "echo '${currentHead}' > ${markerFile}"
                         }
                     }
@@ -641,8 +661,16 @@ pipeline {
                                 // variant. The demo target ships prebuilt, so it is pulled.
                                 // This is Trivy's own prerequisite, not a shared one, so it
                                 // lives in this branch rather than as a separate stage.
-                                sh "docker image inspect ${params.TARGET_IMAGE} > /dev/null 2>&1 || docker pull ${params.TARGET_IMAGE}"
+                                // Inside runScanner so a missing image fails only Trivy;
+                                // the other scanners and the engine still run.
                                 runScanner('Container - Trivy', "${INPUT_DIR}/trivy-report.json") {
+                                    def found = sh(
+                                        script: "docker image inspect '${params.TARGET_IMAGE}' > /dev/null 2>&1 || docker pull '${params.TARGET_IMAGE}'",
+                                        returnStatus: true,
+                                    )
+                                    if (found != 0) {
+                                        error "image ${params.TARGET_IMAGE} not found locally or in a registry - build it first (docker build -t ${params.TARGET_IMAGE} .)"
+                                    }
                                     sh """
                                         docker run --rm --cpus="0.5" \
                                           -v /var/run/docker.sock:/var/run/docker.sock \
@@ -721,7 +749,7 @@ pipeline {
                             """
                         } else {
                             echo 'AWS monitoring disabled for this run.'
-                            scanStatus['Cloud - AWS monitor'] = 'skipped'
+                            scanStatus['Cloud - AWS monitor'] = 'skipped: AWS checks are turned off for this run'
                         }
                     }
 

@@ -227,10 +227,13 @@ export class SettingsService {
     }
   }
 
-  /** Checks a path typed in Settings before a scan finds out it was wrong. */
+  /**
+   * Checks a path, or a container image name (kind=image), typed in Settings
+   * before a scan finds out it was wrong.
+   */
   async checkPath(kind: string, path: string): Promise<PathCheck> {
-    if (kind !== 'iac' && kind !== 'source') {
-      return { ok: false, level: 'error', message: 'kind must be "iac" or "source".' };
+    if (kind !== 'iac' && kind !== 'source' && kind !== 'image') {
+      return { ok: false, level: 'error', message: 'kind must be "iac", "source" or "image".' };
     }
     try {
       return (await this.runDetect(['check', '--kind', kind, '--path', path ?? ''])) as PathCheck;
@@ -260,6 +263,8 @@ export class SettingsService {
     relevant: boolean;
     healthy: boolean;
     crashReason?: 'oom' | 'other';
+    /** SonarQube never came up this boot, so SAST is off until a restart. */
+    didNotStart?: 'timeout' | 'token';
     message?: string;
   }> {
     if (process.env.SONARQUBE_AUTOSTART !== 'true' || !existsSync('/opt/sonarqube')) {
@@ -271,6 +276,22 @@ export class SettingsService {
       return { relevant: false, healthy: false }; // still booting for the first time
     }
     const marker = await readFile(markerFile, 'utf-8').catch(() => '');
+    // sonarqube-autoconfig.sh leaves this beside an empty marker when it gave
+    // up, which otherwise looks the same as "never asked to start".
+    const failedFile = '/var/jenkins_home/.sonar-failed';
+    if (!marker.trim() && existsSync(failedFile)) {
+      const reason = (await readFile(failedFile, 'utf-8').catch(() => '')).trim();
+      const didNotStart = reason === 'token' ? 'token' : 'timeout';
+      return {
+        relevant: true,
+        healthy: false,
+        didNotStart,
+        message:
+          didNotStart === 'timeout'
+            ? 'SonarQube did not start within 5 minutes, so SAST is off until ThreatWeave restarts.'
+            : 'SonarQube started but refused to issue an analysis token, so SAST is off until ThreatWeave restarts.',
+      };
+    }
     if (!/^SONAR_HOST_URL=/m.test(marker)) {
       return { relevant: false, healthy: false }; // autoconfig ran but never confirmed SonarQube up
     }

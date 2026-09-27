@@ -21,6 +21,44 @@ _SOURCES = {
     "aws-findings.json": ("aws", normaliser.from_aws),
 }
 
+# Stage names the Jenkinsfile writes into scan-status.json, per source.
+_STAGE_NAMES = {
+    "trivy": "Container - Trivy",
+    "sonarqube": "SAST - SonarQube",
+    "gitleaks": "Secrets - GitLeaks",
+    "checkov": "IaC - Checkov",
+    "aws": "Cloud - AWS monitor",
+}
+
+
+def _load_stage_status(input_dir: Path) -> dict:
+    """What the pipeline itself recorded for each scanner, if it wrote it.
+
+    Older runs, and the API's on-demand re-scoring of old inputs, have no
+    such file - every source then falls back to what the reports alone show.
+    """
+    try:
+        with open(input_dir / "scan-status.json", "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _without_report(stage: str | None) -> tuple[str, str | None]:
+    """Status and reason for a source that has no report this run."""
+    if not stage:
+        return "missing", None
+    if stage == "skipped":
+        return "skipped", "not configured"
+    if stage.startswith("skipped:"):
+        return "skipped", stage[len("skipped:"):].strip()[:200]
+    if stage.startswith("failed:"):
+        return "failed", stage[len("failed:"):].strip()[:200]
+    if stage == "no report produced":
+        return "failed", "the scanner ran but wrote no report"
+    return "missing", None
+
 
 def load_all(input_dir: str | Path) -> tuple[list[Finding], list[dict]]:
     """Returns (findings, source_status).
@@ -42,15 +80,21 @@ def load_all(input_dir: str | Path) -> tuple[list[Finding], list[dict]]:
     input_dir = Path(input_dir)
     findings: list[Finding] = []
     status: list[dict] = []
+    stages = _load_stage_status(input_dir)
 
     for filename, (source, normalise) in _SOURCES.items():
         path = input_dir / filename
+        stage = stages.get(_STAGE_NAMES[source])
         if not path.exists():
             print(f"  [skip] {filename} not found")
-            status.append({
+            state, reason = _without_report(stage)
+            entry = {
                 "source": source, "file": filename,
-                "status": "missing", "findings": 0,
-            })
+                "status": state, "findings": 0,
+            }
+            if reason:
+                entry["detail"] = reason
+            status.append(entry)
             continue
         try:
             with open(path, "r", encoding="utf-8") as fh:
@@ -65,6 +109,15 @@ def load_all(input_dir: str | Path) -> tuple[list[Finding], list[dict]]:
             continue
         findings.extend(new)
         print(f"  [ok]   {filename}: {len(new)} findings")
+        if stage and "carried over" in stage:
+            # Reused from an earlier scan of the same project - real
+            # findings, but not from this run's code.
+            status.append({
+                "source": source, "file": filename,
+                "status": "stale", "findings": len(new),
+                "detail": "carried over from an earlier scan",
+            })
+            continue
         status.append({
             "source": source, "file": filename,
             "status": "ok", "findings": len(new),

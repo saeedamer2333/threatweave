@@ -32,8 +32,15 @@ def test_results_only_mount_gives_its_parent_as_host_workspace():
     ]
     assert td.host_paths(mounts) == {
         "HOST_WORKSPACE": "D:/threatweave/accesshub",
+        "HOST_FINDINGS": "D:/threatweave/accesshub/findings",
         "TARGET_PATH": "D:/code/AccessHub",
     }
+
+
+def test_results_folder_with_another_name_is_mapped_exactly():
+    # Reports must land in D:/tw-test/data-a, not a guessed D:/tw-test/findings.
+    mounts = [{"Source": "D:\\tw-test\\data-a", "Destination": "/workspace/findings"}]
+    assert td.host_paths(mounts)["HOST_FINDINGS"] == "D:/tw-test/data-a"
 
 
 def test_a_full_workspace_mount_wins_over_a_findings_mount():
@@ -188,3 +195,37 @@ def test_startup_respects_an_explicitly_empty_value(tmp_path):
 
 def test_startup_with_nothing_mounted_detects_no_targets(tmp_path):
     assert td.startup_env(environ={"HOST_WORKSPACE": "/h", "TARGET_PATH": "/t"}, mounts=[], root=str(tmp_path)) == {}
+
+
+# ---- image check -----------------------------------------------------------
+
+def _fake_docker(local: int, remote: int = 404):
+    def get(path, timeout=5.0):
+        return local if path.startswith("/images/") else remote
+    return get
+
+
+def test_check_image_found_locally():
+    r = td.check_image("myapp:latest", docker_get=_fake_docker(200))
+    assert r["level"] == "ok" and r["ok"]
+
+
+def test_check_image_only_in_a_registry_warns_it_will_be_pulled():
+    r = td.check_image("nginx:alpine", docker_get=_fake_docker(404, 200))
+    assert r["level"] == "warn" and "pulled" in r["message"]
+
+
+def test_check_image_nowhere_says_to_build_it_first():
+    r = td.check_image("myapp:latest", docker_get=_fake_docker(404, 404))
+    assert not r["ok"] and "docker build -t myapp:latest ." in r["message"]
+
+
+def test_check_image_rejects_an_invalid_name_without_calling_docker():
+    def boom(path, timeout=5.0):
+        raise AssertionError("docker should not be called")
+    r = td.check_image("bad name; rm -rf /", docker_get=boom)
+    assert not r["ok"]
+
+
+def test_check_image_empty_means_trivy_is_skipped():
+    assert td.check_image("  ")["level"] == "info"

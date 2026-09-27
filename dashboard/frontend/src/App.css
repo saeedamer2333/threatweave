@@ -805,3 +805,15 @@ a.cve-chip:hover { background: #dfe2fd; }
 .path-check-ok { color: var(--good); }
 .path-check-warn { color: #96690a; }
 .path-check-error { color: var(--crit); }
+
+/* Scanner states written by the pipeline (scan-status.json). */
+.source-chip.source-skipped .source-dot { background: var(--muted); }
+.source-chip.source-skipped { color: var(--muted); font-weight: 500; }
+.source-chip.source-failed .source-dot { background: var(--crit); }
+.source-chip.source-failed { border-color: #f4c6c8; }
+.source-chip.source-failed .source-reason { color: var(--crit); font-style: normal; }
+.source-chip.source-stale .source-dot { background: var(--med); }
+.source-chip.source-stale { border-color: #f1dc9a; }
+.source-chip.source-stale .source-reason { color: #9a7300; font-style: normal; }
+.sources-note-failed { border-left-color: var(--crit); background: #fdf0f0; }
+.sources-note-stale { border-left-color: var(--med); color: #7a5c00; }

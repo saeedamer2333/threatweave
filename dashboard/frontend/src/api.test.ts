@@ -127,6 +127,16 @@ describe('api', () => {
     expect(result.level).toBe('ok');
   });
 
+  it('checkPath checks a container image name, encoding the tag separator', async () => {
+    const fetchMock = mockFetchOnce(200, { ok: false, level: 'error', message: 'myapp:latest was not found.' });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await api.checkPath('image', 'myapp:latest');
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/settings/check-path?kind=image&path=myapp%3Alatest', expect.anything());
+    expect(result.ok).toBe(false);
+  });
+
   it('runPipeline sends a POST to /api/pipeline/run', async () => {
     const fetchMock = mockFetchOnce(200, { state: 'queued' });
     globalThis.fetch = fetchMock as unknown as typeof fetch;

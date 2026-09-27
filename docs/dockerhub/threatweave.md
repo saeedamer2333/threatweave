@@ -39,7 +39,7 @@ SonarQube configures itself on first boot, which takes a few minutes.
 
 This starts the dashboard, API, Jenkins and SonarQube so you can look around. **To actually
 scan, use the command in _Scan your own project_ below**: the scanners run as sibling
-containers, so Jenkins needs a checkout of this repository on the host (`HOST_WORKSPACE`).
+containers, so they need your project and a results folder mounted from the host.
 
 **Nothing is scanned until you say what to scan.** Settings → Pipeline target walks you
 through the four fields (source folder, Terraform folder, container image, SonarQube key).
@@ -78,28 +78,49 @@ access block and default encryption, IAM `AdministratorAccess` and extra access 
 
 ## Scan your own project
 
-Scanners run as sibling containers through the Docker socket, so the host needs a checkout
-of the project repository and your target folder, both passed as **host** paths:
+No clone needed: everything ThreatWeave runs is inside the image. The scanners run as
+sibling containers through the Docker socket, so they need two **host** paths: your
+project, and an empty folder for results (Docker creates it).
 
 ```bash
 docker run -d --name threatweave \
-  -p 3000:80 -p 4000:4000 -p 8080:8080 -p 50000:50000 -p 9000:9000 \
+  -p 3000:80 -p 4000:4000 -p 8080:8080 -p 9000:9000 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v threatweave-jenkins-home:/var/jenkins_home \
-  -v /path/to/threatweave:/workspace \
+  -v /path/to/threatweave-data/findings:/workspace/findings \
   -v /path/to/your-project:/target:ro \
-  -e HOST_WORKSPACE=/path/to/threatweave \
+  -v ~/.aws:/root/.aws:ro -v ~/.aws:/var/jenkins_home/.aws:ro \
+  -e HOST_WORKSPACE=/path/to/threatweave-data \
   -e TARGET_PATH=/path/to/your-project \
+  -e SCAN_SOURCE_DIR=/target \
+  -e SCAN_IAC_DIR=/target/infra \
+  -e SCAN_IMAGE=myapp:latest \
+  -e SCAN_SONAR_KEY=my-app \
+  -e JENKINS_ADMIN_PASSWORD=change-me \
   saeedalameri/threatweave:latest
 ```
 
-Then either fill in **Settings → Pipeline target** (source directory `/target`, your
-Terraform folder, your container image), or set them at install time with
-`-e SCAN_SOURCE_DIR=/target -e SCAN_IAC_DIR=/target/infra -e SCAN_IMAGE=myapp:latest`.
-Settings also detects the mounted project and offers to fill the fields for you. Click
-**Run scan**.
+Then open http://localhost:3000 and click **Run scan**. Notes:
 
-On Windows, use forward slashes in paths (`D:/projects/my-app`).
+- `HOST_WORKSPACE` is the folder **above** `findings`; results are written to
+  `<HOST_WORKSPACE>/findings`. Keep it outside your project.
+- `SCAN_*` lines are optional: leave any out (or set it later in **Settings → Pipeline
+  target**, which also detects the mounted project) and that scanner is skipped.
+  AWS CDK projects: point `SCAN_IAC_DIR` at the synthesized templates, e.g.
+  `/target/infra/cdk.out` after `cdk synth`.
+- The `.aws` lines are optional: drop them to skip the cloud checks, or enter a key in
+  Settings instead.
+- The project must be a Git repository (GitLeaks reads its history).
+- Scanning several projects: one container per project, each with its own name, results
+  folder and ports (e.g. 3100, 4100, 8180, 9100).
+- On Windows (PowerShell), use forward slashes in paths (`D:/projects/my-app`), end lines
+  with a backtick instead of `\`, and use `$env:USERPROFILE\.aws` for `~/.aws`.
+- Dismissed findings are kept while the container exists; they are not carried over if you
+  remove and recreate it.
+
+**Developing ThreatWeave itself?** Mount a clone of the repository instead:
+`-v /path/to/threatweave:/workspace -e HOST_WORKSPACE=/path/to/threatweave` (no separate
+`findings` mount), so the engine code comes from your checkout.
 
 ---
 

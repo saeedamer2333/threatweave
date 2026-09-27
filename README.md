@@ -262,8 +262,8 @@ docker run -d --name threatweave \
 
 Dashboard on `:3000`, API directly on `:4000`, Jenkins on `:8080`, SonarQube
 on `:9000` — all reachable immediately. This form is for looking around:
-running the pipeline needs `HOST_WORKSPACE` and a host checkout (see
-*Scanning your own project in this mode* below), and nothing is scanned until
+running the pipeline needs your project and a results folder mounted from the
+host (see *Scanning your own project in this mode, without a clone* below), and nothing is scanned until
 you set what to scan (Settings → Pipeline target, or the `SCAN_*` variables
 below). For the Juice Shop demo, use Option 1 or 2.
 Both volumes are optional but
@@ -300,6 +300,27 @@ AWS credentials: mount `~/.aws` read-only (`-v ~/.aws:/root/.aws:ro`) rather
 than setting keys as environment variables — the dashboard's Settings page
 only ever *reports* what Boto3 already resolved, matching the project's "no
 credentials in the product" posture described below.
+
+**Scanning your own project in this mode, without a clone.** The engine is
+already inside the image, so the scanners only need two host paths: the project
+(`/target`) and an empty folder for results, mounted at `/workspace/findings`
+with `HOST_WORKSPACE` set to the folder above it:
+
+```bash
+docker run -d --name threatweave \
+  -p 3000:80 -p 4000:4000 -p 8080:8080 -p 9000:9000 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v threatweave-jenkins-home:/var/jenkins_home \
+  -v /path/to/threatweave-data/findings:/workspace/findings \
+  -v /path/to/your-project:/target:ro \
+  -e HOST_WORKSPACE=/path/to/threatweave-data \
+  -e TARGET_PATH=/path/to/your-project \
+  -e SCAN_SOURCE_DIR=/target -e SCAN_IAC_DIR=/target/infra \
+  saeedalameri/threatweave:latest
+```
+
+The clone-based form below remains the way to run ThreatWeave's own engine code
+from a working copy.
 
 **Scanning your own project in this mode.** The command above is the
 demo-only quick start — it works with no further setup specifically

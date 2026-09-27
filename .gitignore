@@ -51,3 +51,8 @@ Thumbs.db
 # Nothing in the install path retrains it, and P_RF is 45% of the risk score,
 # so a clone without this file silently falls back to a CVSS heuristic.
 !aiops_engine/ml/model/rf_model.joblib
+
+# Analyst suppression decisions belong to each installation, not the product:
+# a fresh clone or image starts with no rules (the engine treats a missing
+# file as "no rules"). Rules are created from the dashboard's Dismiss button.
+aiops_engine/suppression_rules.json

@@ -40,6 +40,12 @@ services:
       # pipeline needs the host-side value for the same sibling-container
       # reason as HOST_WORKSPACE. Empty or relative means the demo target.
       TARGET_PATH: ${TARGET_PATH:-}
+      # What "Run scan" and the automatic runs scan until changed in Settings.
+      # Empty (the default) skips that scanner; see .env.example.
+      SCAN_SOURCE_DIR: ${SCAN_SOURCE_DIR:-}
+      SCAN_IAC_DIR: ${SCAN_IAC_DIR:-}
+      SCAN_IMAGE: ${SCAN_IMAGE:-}
+      SCAN_SONAR_KEY: ${SCAN_SONAR_KEY:-}
       # Set these to enable the SAST stage.
       SONAR_HOST_URL: ${SONAR_HOST_URL:-}
       SONAR_TOKEN: ${SONAR_TOKEN:-}
@@ -100,6 +106,13 @@ services:
       JENKINS_URL: http://jenkins:8080
       JENKINS_ADMIN_ID: ${JENKINS_ADMIN_ID:-admin}
       JENKINS_ADMIN_PASSWORD: ${JENKINS_ADMIN_PASSWORD:-admin}
+      # Default scan targets shown in Settings - same values Jenkins gets.
+      # What "Run scan" and the automatic runs scan until changed in Settings.
+      # Empty (the default) skips that scanner; see .env.example.
+      SCAN_SOURCE_DIR: ${SCAN_SOURCE_DIR:-}
+      SCAN_IAC_DIR: ${SCAN_IAC_DIR:-}
+      SCAN_IMAGE: ${SCAN_IMAGE:-}
+      SCAN_SONAR_KEY: ${SCAN_SONAR_KEY:-}
     volumes:
       - .:/data
       - ${HOME}/.aws:/root/.aws:ro

@@ -143,13 +143,22 @@ configure() {
         .env.example > .env
     ok "Wrote .env (HOST_WORKSPACE=${host_path})"
 
+    # What the pipeline scans (SCAN_* in .env). Empty skips a scanner, so
+    # only fill in what this target actually has.
+    local src iac="" image="" key=""
     if [ "$target_path" = "./demo-app" ]; then
         "$(project_dir)/scripts/fetch-demo-target.sh"
+        src=/target/juice-shop; iac=/workspace/infra
+        image=bkimminich/juice-shop:latest; key=juice-shop
         ok "Scan target: bundled demo (OWASP Juice Shop)"
     else
+        src=/target
+        if ls "$target_path"/infra/*.tf >/dev/null 2>&1; then iac=/target/infra; fi
         ok "Scan target: ${target_path}  (mounted at /target)"
-        warn "Set SOURCE_DIR=/target when you run the pipeline."
+        [ -n "$iac" ] || warn "No infra/*.tf found - Checkov is skipped until you set an IaC folder in Settings."
+        warn "Set your container image in Settings > Pipeline target to include Trivy."
     fi
+    sed -i.bak -e "s|^SCAN_SOURCE_DIR=.*|SCAN_SOURCE_DIR=${src}|"         -e "s|^SCAN_IAC_DIR=.*|SCAN_IAC_DIR=${iac}|"         -e "s|^SCAN_IMAGE=.*|SCAN_IMAGE=${image}|"         -e "s|^SCAN_SONAR_KEY=.*|SCAN_SONAR_KEY=${key}|" .env && rm -f .env.bak
 }
 
 # ------------------------------------------------------------------- start --

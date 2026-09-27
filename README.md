@@ -261,11 +261,12 @@ docker run -d --name threatweave \
 ```
 
 Dashboard on `:3000`, API directly on `:4000`, Jenkins on `:8080`, SonarQube
-on `:9000` — all reachable immediately. The dashboard is empty until the
-first scan. With nothing mounted, "Run scan" covers Trivy (the Juice Shop
-demo image), Checkov (the bundled Terraform) and AWS (if credentials are
-mounted); GitLeaks and SonarQube need source code mounted at `/target` (see
-below). Both volumes are optional but
+on `:9000` — all reachable immediately. This form is for looking around:
+running the pipeline needs `HOST_WORKSPACE` and a host checkout (see
+*Scanning your own project in this mode* below), and nothing is scanned until
+you set what to scan (Settings → Pipeline target, or the `SCAN_*` variables
+below). For the Juice Shop demo, use Option 1 or 2.
+Both volumes are optional but
 recommended: without them, Jenkins configuration and scan history reset on
 every container recreation.
 
@@ -288,6 +289,7 @@ whichever apply with `-e NAME=value`:
 | `JENKINS_ADMIN_ID` | `admin` | Jenkins login username |
 | `JENKINS_ADMIN_PASSWORD` | `admin` | Jenkins login password — **change this for anything but local use** |
 | `SONARQUBE_AUTOSTART` | `true` | Whether the bundled SonarQube runs at all — `false` disables it (saves ~3GB RAM); SAST is skipped, not failed |
+| `SCAN_SOURCE_DIR` / `SCAN_IAC_DIR` / `SCAN_IMAGE` / `SCAN_SONAR_KEY` | empty | What gets scanned (source tree, Terraform folder, container image, SonarQube key) - empty skips that scanner; editable later in Settings |
 | `SONAR_HOST_URL` / `SONAR_TOKEN` | auto-generated | Set these yourself instead to point at an *external* SonarQube (e.g. one from the split setup) rather than the bundled one — leave `SONARQUBE_AUTOSTART=false` in that case |
 | `PORT` | `4000` | Port the API process listens on inside the container |
 | `PYTHON_BIN` | `python3` | Interpreter the API shells out to for the engine |
@@ -405,31 +407,40 @@ report exists with non-trivial size rather than trusting an exit code.
 
 ### Scanning your own project
 
-The bundled Juice Shop is only the default target. To scan something else, set
-`TARGET_PATH` in `.env` to its absolute host path — it is mounted read-only at
-`/target` — then run the pipeline with parameters pointing there:
+Nothing is scanned until you say what to scan: every target starts empty, and an
+empty target skips its scanner rather than falling back to a demo. Set `TARGET_PATH`
+in `.env` to the project's absolute host path (it is mounted read-only at `/target`),
+then set the targets either in `.env` or later in **Settings → Pipeline target**,
+which also detects the mounted project and offers to fill them in:
 
 ```bash
 TARGET_PATH=/home/you/my-app          # in .env, then: docker compose up -d
+SCAN_SOURCE_DIR=/target
+SCAN_IAC_DIR=/target/infra
+SCAN_IMAGE=my-app:latest
 ```
 
-| Parameter | Value |
-|---|---|
-| `SOURCE_DIR` | `/target` — scanned by GitLeaks and SonarQube |
-| `TARGET_IMAGE` | your project's image, scanned by Trivy |
-| `IAC_DIR` | `/target/infra` if the project has Terraform |
-| `SONAR_PROJECT_KEY` | a key of your own, when SAST is enabled |
+| `.env` / `-e` | Jenkins parameter | Scanned by | Empty means |
+|---|---|---|---|
+| `SCAN_SOURCE_DIR` | `SOURCE_DIR` | GitLeaks, SonarQube | both skipped, and automatic runs stay idle |
+| `SCAN_IAC_DIR` | `IAC_DIR` | Checkov | skipped |
+| `SCAN_IMAGE` | `TARGET_IMAGE` | Trivy | skipped |
+| `SCAN_SONAR_KEY` | `SONAR_PROJECT_KEY` | SonarQube | the source folder's name |
+
+To try the bundled OWASP Juice Shop demo instead, run
+`scripts/fetch-demo-target.sh` and use the demo values listed in `.env.example`
+(the installer does this when you leave the project path blank).
 
 `toHostPath` translates both `/workspace` (ThreatWeave itself) and `/target`
 (the project under test) to host paths, so scanners running as sibling
 containers mount the real directories. The installer prompts for this path
 when run interactively; `THREATWEAVE_TARGET` sets it non-interactively.
 
-Two things are worth doing before trusting the numbers on a new project:
-clear `aiops_engine/suppression_rules.json` to `{"rules": []}`, since the
-shipped rule suppresses Juice Shop's test fixtures, and replace the
-`Build & unit tests` stage with the project's real toolchain — it currently
-just pulls a prebuilt image.
+Suppression rules start empty: each installation's analysts create their own
+with **Dismiss** on a finding (`aiops_engine/suppression_rules.json` is not part
+of the repository or the images). Before trusting the numbers on a new project,
+also replace the `Dependencies & unit tests` stage with the project's real
+toolchain.
 
 ---
 

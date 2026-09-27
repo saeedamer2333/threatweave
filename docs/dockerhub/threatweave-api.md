@@ -31,6 +31,6 @@ Useful endpoints: `GET /api/findings`, `GET /api/findings/clusters`, `POST /api/
 | `JENKINS_ADMIN_ID` / `JENKINS_ADMIN_PASSWORD` | `admin` | Jenkins credentials |
 | `FINDINGS_DIR`, `AIOPS_OUTPUT`, `HISTORY_FILE` | under `/app/findings` | Where engine output is read and written |
 
-**Tags:** `latest` = `2026-09-26` (current) · `2026-09-02` (version at project submission)
+**Tags:** `latest` = `2026-09-27` (current) · `2026-09-26` · `2026-09-02` (version at project submission)
 
 **Source:** https://github.com/saeedamer2333/threatweave · MIT license

@@ -142,7 +142,10 @@ COPY jenkins/init.groovy.d/ /usr/share/jenkins/ref/init.groovy.d/
 # casc.yaml's job-dsl script reads this file directly at CasC-init time
 # (readFileFromWorkspace cannot be used that early), so it needs to exist at
 # this exact path once seeded - see the comment in casc.yaml itself.
-COPY Jenkinsfile /usr/share/jenkins/ref/Jenkinsfile
+# `.override` makes jenkins.sh re-copy it into JENKINS_HOME on every start.
+# Without it the file is copied only once, so anyone upgrading the image but
+# keeping their jenkins-home volume would keep running the old pipeline.
+COPY Jenkinsfile /usr/share/jenkins/ref/Jenkinsfile.override
 COPY jenkins/casc.yaml /usr/share/jenkins/ref/casc.yaml
 
 ENV JAVA_OPTS="-Djenkins.install.runSetupWizard=false"

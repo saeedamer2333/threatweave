@@ -22,3 +22,6 @@ findings/**/*.json
 
 docs/
 validation/scenarios/
+
+# Each installation's own analyst decisions - images ship with no rules.
+aiops_engine/suppression_rules.json

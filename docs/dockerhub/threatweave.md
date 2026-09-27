@@ -17,7 +17,7 @@ Built as a BSc Software Engineering final-year project (Asia Pacific University,
 
 ---
 
-## Quick start (demo, no setup)
+## Quick look (dashboard only)
 
 ```bash
 docker run -d --name threatweave \
@@ -35,11 +35,19 @@ docker run -d --name threatweave \
 | Jenkins | http://localhost:8080 (admin / admin; change `JENKINS_ADMIN_PASSWORD`) |
 | SonarQube | http://localhost:9000 (password generated on first boot; see `docker logs threatweave`) |
 
-SonarQube configures itself on first boot, which takes a few minutes. The dashboard is empty
-until the first pipeline run: open it and click **Run scan**. With nothing mounted, that
-covers Trivy (the Juice Shop demo image), Checkov (the bundled Terraform) and AWS (if
-credentials are mounted). GitLeaks and SonarQube need your source code: see
-*Scan your own project* below.
+SonarQube configures itself on first boot, which takes a few minutes.
+
+This starts the dashboard, API, Jenkins and SonarQube so you can look around. **To actually
+scan, use the command in _Scan your own project_ below**: the scanners run as sibling
+containers, so Jenkins needs a checkout of this repository on the host (`HOST_WORKSPACE`).
+
+**Nothing is scanned until you say what to scan.** Settings → Pipeline target walks you
+through the four fields (source folder, Terraform folder, container image, SonarQube key).
+Any field left empty is skipped, never pointed at a default project.
+
+**Want the OWASP Juice Shop demo instead?** The one-line installer sets it up with Docker
+Compose when you leave the project path blank:
+`curl -fsSL https://raw.githubusercontent.com/saeedamer2333/threatweave/main/scripts/install.sh | bash`
 
 **Requirements:** Docker, and about **6 GB of free RAM** with SonarQube. On a smaller machine
 add `-e SONARQUBE_AUTOSTART=false`: the SAST stage then shows as *skipped* and everything
@@ -85,8 +93,11 @@ docker run -d --name threatweave \
   saeedalameri/threatweave:latest
 ```
 
-Then in **Settings**: source directory `/target`, IaC directory (if you use Terraform), your
-container image for Trivy, and a SonarQube project key. Click **Run scan**.
+Then either fill in **Settings → Pipeline target** (source directory `/target`, your
+Terraform folder, your container image), or set them at install time with
+`-e SCAN_SOURCE_DIR=/target -e SCAN_IAC_DIR=/target/infra -e SCAN_IMAGE=myapp:latest`.
+Settings also detects the mounted project and offers to fill the fields for you. Click
+**Run scan**.
 
 On Windows, use forward slashes in paths (`D:/projects/my-app`).
 
@@ -101,6 +112,12 @@ On Windows, use forward slashes in paths (`D:/projects/my-app`).
 | `SONAR_HOST_URL` / `SONAR_TOKEN` | auto | Use an external SonarQube instead |
 | `HOST_WORKSPACE` | – | Host path of the project checkout (own-project mode) |
 | `TARGET_PATH` | – | Host path of the project to scan |
+| `SCAN_SOURCE_DIR` | empty | Source tree for GitLeaks and SonarQube, e.g. `/target`. Empty skips both. |
+| `SCAN_IAC_DIR` | empty | Terraform folder for Checkov, e.g. `/target/infra`. Empty skips it. |
+| `SCAN_IMAGE` | empty | Container image for Trivy, e.g. `myapp:latest`. Empty skips it. |
+| `SCAN_SONAR_KEY` | empty | SonarQube project key. Empty uses the source folder's name. |
+
+Suppression rules start empty: analysts create them with **Dismiss** on a finding.
 
 ---
 
@@ -108,7 +125,8 @@ On Windows, use forward slashes in paths (`D:/projects/my-app`).
 
 | Tag | What it is |
 |---|---|
-| `latest`, `2026-09-26` | Current: adds session AWS keys in Settings, a read-only policy guide, and live per-scanner progress |
+| `latest`, `2026-09-27` | Current: scan targets start empty (or from `SCAN_*`), a guided setup in Settings, no bundled suppression rules, and upgrades keep the pipeline current |
+| `2026-09-26` | Session AWS keys in Settings, a read-only policy guide, live per-scanner progress |
 | `2026-08-31` | Version submitted with the final-year project report |
 
 ## Other images

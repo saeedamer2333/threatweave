@@ -22,6 +22,6 @@ docker run -d -p 3000:80 -e API_TARGET=host.docker.internal:4000 \
 
 > The dashboard has no login in this version. Use it on a trusted, private network only.
 
-**Tags:** `latest` = `2026-09-26` (current) · `2026-09-02` (version at project submission)
+**Tags:** `latest` = `2026-09-27` (current) · `2026-09-26` · `2026-09-02` (version at project submission)
 
 **Source:** https://github.com/saeedamer2333/threatweave · MIT license

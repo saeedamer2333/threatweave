@@ -299,9 +299,12 @@ export default function App() {
           <div className="welcome-banner">
             <div className="welcome-text">
               <strong>No scan results yet</strong>
-              <span>Everything below is showing its normal layout with no data yet. Run the pipeline to see real findings.</span>
+              <span>Choose what to scan in Settings → Pipeline target (your project folder, Terraform folder and container image), then run a scan.</span>
             </div>
-            <button className="btn-primary" onClick={runScan} disabled={scanInFlight}>Run scan</button>
+            <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+              <button className="btn-ghost" onClick={() => setView('settings')}>Open Settings</button>
+              <button className="btn-primary" onClick={runScan} disabled={scanInFlight}>Run scan</button>
+            </div>
           </div>
         )}
         {/* A genuine connectivity failure (API container down, wrong port,
@@ -1160,8 +1163,11 @@ function PipelineTargetCard({ settings, save, saving }: {
   useEffect(() => { api.detectTarget().then(setDetected).catch(() => {}); }, []);
 
   const suggestedTargetImage = detected?.hasDockerfile ? undefined : '';
-  const suggestionDiffers = detected && !dismissed && (
+  // Only a real mounted project is worth suggesting; an empty sourceDir from
+  // detection means nothing is mounted at /target.
+  const suggestionDiffers = detected && detected.sourceDir && !dismissed && (
     detected.sourceDir !== p.sourceDir ||
+    (detected.iacDir && detected.iacDir !== p.iacDir) ||
     (detected.projectName && detected.projectName !== p.sonarProjectKey) ||
     (suggestedTargetImage === '' && p.targetImage !== '')
   );
@@ -1170,6 +1176,7 @@ function PipelineTargetCard({ settings, save, saving }: {
     if (!detected) return;
     const patch: Partial<typeof p> = { sourceDir: detected.sourceDir };
     if (detected.projectName) patch.sonarProjectKey = detected.projectName;
+    if (detected.iacDir) patch.iacDir = detected.iacDir;
     if (!detected.hasDockerfile) patch.targetImage = '';
     save({ pipeline: { ...p, ...patch } });
     setDismissed(true);
@@ -1182,21 +1189,39 @@ function PipelineTargetCard({ settings, save, saving }: {
         <span className="stat-sub">what "Run scan" actually scans</span>
       </div>
       <p className="set-note" style={{ marginTop: 0, marginBottom: 16 }}>
-        These map directly to the Jenkins job's own parameters — editing them
-        here changes what the next "Run scan" click passes in, nothing more.
-        <strong> Never applied automatically</strong> — they stay at whatever
-        was last saved (the installed default is the bundled Juice Shop demo)
-        until you either edit a field yourself or accept a detected
-        suggestion below. Each field also explains what real value to put
-        there.
+        These are the Jenkins job's own parameters: editing them changes what the next
+        "Run scan" passes in. They start empty, or with the <span className="mono">SCAN_*</span> values
+        given at install time, and are never changed without you. <strong>An empty field means
+        that scanner is skipped</strong>, never pointed at a default project.
       </p>
+      {!p.sourceDir && !p.iacDir && !p.targetImage && (
+        <div className="scan-setup">
+          <strong>Tell ThreatWeave what to scan</strong>
+          <ol>
+            <li>
+              <b>Mount your project</b> when starting ThreatWeave, read-only:
+              {' '}<span className="mono">-v /path/to/project:/target:ro -e TARGET_PATH=/path/to/project</span>
+              {' '}(or <span className="mono">TARGET_PATH</span> in <span className="mono">.env</span>). ThreatWeave never changes your code.
+            </li>
+            <li><b>Source directory</b>: <span className="mono">/target</span>. GitLeaks looks for secrets, SonarQube for code vulnerabilities.</li>
+            <li><b>IaC directory</b>: your Terraform folder, for example <span className="mono">/target/infra</span>, for Checkov.</li>
+            <li><b>Container image</b>: the image you deploy, for example <span className="mono">myapp:latest</span>, for Trivy.</li>
+            <li>Click <b>Run scan</b>. Fields left empty are skipped; AWS checks run whenever credentials are connected.</li>
+          </ol>
+          <p>
+            To set these once at install time instead, add
+            {' '}<span className="mono">-e SCAN_SOURCE_DIR=/target -e SCAN_IAC_DIR=/target/infra -e SCAN_IMAGE=myapp:latest</span>.
+          </p>
+        </div>
+      )}
       {suggestionDiffers && (
         <div className="welcome-banner" style={{ marginBottom: 16 }}>
           <div className="welcome-text">
-            <strong>Detected a different project mounted at /target</strong>
+            <strong>{p.sourceDir ? 'Detected a different project mounted at /target' : 'Found a project mounted at /target'}</strong>
             <span>
               {detected!.projectName ? `Found "${detected!.projectName}" (from its package.json)` : 'Found a project'}
               {detected!.hasDockerfile ? ' with its own Dockerfile.' : ' with no Dockerfile - Container image would be cleared.'}
+              {detected!.iacDir ? ` Terraform found in ${detected!.iacDir}.` : ''}
               {' '}Apply these as the real scan target?
             </span>
           </div>
@@ -1209,8 +1234,8 @@ function PipelineTargetCard({ settings, save, saving }: {
 
       <label className="set-row hinted">
         <span className="set-label-group">
-          <span className="set-label">Source directory</span>
-          <span className="set-hint">What GitLeaks/SonarQube scan. Use <span className="mono">/target</span> to scan whatever you mounted there — leave as <span className="mono">/target/juice-shop</span> only if you're still scanning the bundled demo.</span>
+          <span className="set-label">Source directory {!p.sourceDir && <span className="skip-tag">GitLeaks and SonarQube skipped</span>}</span>
+          <span className="set-hint">What GitLeaks and SonarQube scan. Use <span className="mono">/target</span> for the project you mounted there.</span>
         </span>
         <input
           className="set-input"
@@ -1223,8 +1248,8 @@ function PipelineTargetCard({ settings, save, saving }: {
 
       <label className="set-row hinted">
         <span className="set-label-group">
-          <span className="set-label">IaC directory</span>
-          <span className="set-hint">What Checkov scans for Terraform/CloudFormation misconfigurations. Use <span className="mono">/target/infra</span> if your project has real IaC files there — otherwise leave the default; Checkov will just report nothing.</span>
+          <span className="set-label">IaC directory {!p.iacDir && <span className="skip-tag">Checkov skipped</span>}</span>
+          <span className="set-hint">Where your Terraform or CloudFormation lives, for example <span className="mono">/target/infra</span>. Leave empty if the project has none.</span>
         </span>
         <input
           className="set-input"
@@ -1237,8 +1262,8 @@ function PipelineTargetCard({ settings, save, saving }: {
 
       <label className="set-row hinted">
         <span className="set-label-group">
-          <span className="set-label">Container image</span>
-          <span className="set-hint">A real image name Trivy can pull/scan, e.g. <span className="mono">myapp:latest</span>. Clear this field entirely if your project has no Dockerfile — the container scan is skipped rather than failing.</span>
+          <span className="set-label">Container image {!p.targetImage && <span className="skip-tag">Trivy skipped</span>}</span>
+          <span className="set-hint">The image you deploy, which Trivy pulls and scans, for example <span className="mono">myapp:latest</span>. Leave empty if the project has no container.</span>
         </span>
         <input
           className="set-input"
@@ -1252,7 +1277,7 @@ function PipelineTargetCard({ settings, save, saving }: {
       <label className="set-row hinted">
         <span className="set-label-group">
           <span className="set-label">SonarQube project key</span>
-          <span className="set-hint">Any name you choose to identify this project in SonarQube, e.g. <span className="mono">accesshub</span>. Only matters if SAST is enabled below.</span>
+          <span className="set-hint">A name for this project in SonarQube, for example <span className="mono">accesshub</span>. Empty uses the source folder's name.</span>
         </span>
         <input
           className="set-input"

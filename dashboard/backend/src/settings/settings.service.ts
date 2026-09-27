@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { readFile, writeFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import * as http from 'http';
 import { PATHS } from '../config/paths';
@@ -35,21 +35,45 @@ export interface AppSettings {
   pipeline: PipelineSettings;
 }
 
-const PIPELINE_DEFAULTS: PipelineSettings = {
-  sourceDir: '/target/juice-shop',
-  iacDir: '/workspace/infra',
-  targetImage: 'bkimminich/juice-shop:latest',
-  sonarProjectKey: 'threatweave-demo',
-  runAwsMonitor: true,
-  failOnCritical: false,
-};
+/**
+ * What "Run scan" scans before the user has chosen anything: read from the
+ * environment (SCAN_* in .env, or `-e` on docker run) and empty otherwise.
+ * A fresh install scans nothing it was not told to, and an empty target is
+ * skipped by the pipeline rather than pointed at a demo. Must stay in step
+ * with the Jenkins job's own defaults in jenkins/casc.yaml.
+ */
+function pipelineDefaults(): PipelineSettings {
+  const env = (name: string) => (process.env[name] ?? '').trim();
+  return {
+    sourceDir: env('SCAN_SOURCE_DIR'),
+    iacDir: env('SCAN_IAC_DIR'),
+    targetImage: env('SCAN_IMAGE'),
+    sonarProjectKey: env('SCAN_SONAR_KEY'),
+    runAwsMonitor: true,
+    failOnCritical: false,
+  };
+}
 
-const DEFAULTS: AppSettings = {
-  awsRegion: '',
-  checks: { ec2: true, sg: true, s3: true, iam: true },
-  scanIntervalMinutes: 30,
-  pipeline: PIPELINE_DEFAULTS,
-};
+function defaults(): AppSettings {
+  return {
+    awsRegion: '',
+    checks: { ec2: true, sg: true, s3: true, iam: true },
+    scanIntervalMinutes: 30,
+    pipeline: pipelineDefaults(),
+  };
+}
+
+/** Folders where a project's Terraform usually lives, checked in order. */
+const IAC_CANDIDATES = ['infra', 'terraform', 'iac', 'infrastructure', 'deploy', '.'];
+
+function hasTerraform(dir: string): boolean {
+  try {
+    const entries = readdirSync(dir);
+    return Array.isArray(entries) && entries.some((f) => String(f).endsWith('.tf'));
+  } catch {
+    return false;
+  }
+}
 
 const SETTINGS_FILE =
   process.env.SETTINGS_FILE ?? join(PATHS.findingsDir, 'settings.json');
@@ -59,6 +83,7 @@ export class SettingsService {
   private readonly logger = new Logger(SettingsService.name);
 
   async get(): Promise<AppSettings> {
+    const DEFAULTS = defaults();
     if (!existsSync(SETTINGS_FILE)) return DEFAULTS;
     try {
       const raw = await readFile(SETTINGS_FILE, 'utf-8');
@@ -68,7 +93,7 @@ export class SettingsService {
         ...DEFAULTS,
         ...saved,
         checks: { ...DEFAULTS.checks, ...(saved.checks ?? {}) },
-        pipeline: { ...PIPELINE_DEFAULTS, ...(saved.pipeline ?? {}) },
+        pipeline: { ...DEFAULTS.pipeline, ...(saved.pipeline ?? {}) },
       };
     } catch (err) {
       this.logger.warn(`Could not read settings, using defaults: ${err}`);
@@ -109,8 +134,21 @@ export class SettingsService {
     sourceDir: string;
     projectName?: string;
     hasDockerfile: boolean;
+    /** A folder with Terraform files, for Checkov - absent when none found. */
+    iacDir?: string;
   }> {
     const root = PATHS.target;
+    // Nothing mounted (an empty /target): there is no project to suggest.
+    let mounted = false;
+    try {
+      const entries = readdirSync(root);
+      mounted = Array.isArray(entries) && entries.length > 0;
+    } catch {
+      mounted = false;
+    }
+    if (!mounted) {
+      return { sourceDir: '', hasDockerfile: false };
+    }
     // The bundled demo nests its real content one level down
     // (demo-app/juice-shop/); a project mounted directly at /target has no
     // such subfolder, so its own root is what should be scanned.
@@ -134,10 +172,14 @@ export class SettingsService {
       this.logger.warn(`Could not read package.json for target detection: ${err}`);
     }
 
+    const iacFolder = IAC_CANDIDATES.map((d) => (d === '.' ? sourceDir : join(sourceDir, d)))
+      .find((d) => hasTerraform(d));
+
     return {
       sourceDir,
       projectName,
       hasDockerfile: existsSync(join(sourceDir, 'Dockerfile')),
+      ...(iacFolder ? { iacDir: iacFolder } : {}),
     };
   }
 

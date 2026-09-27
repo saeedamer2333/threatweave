@@ -107,6 +107,8 @@ export interface DetectedTarget {
   sourceDir: string;
   projectName?: string;
   hasDockerfile: boolean;
+  /** A folder with Terraform files, for Checkov - absent when none found. */
+  iacDir?: string;
 }
 
 export interface SonarQubeStatus {

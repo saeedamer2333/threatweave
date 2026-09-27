@@ -6,7 +6,7 @@ jest.mock('../config/paths', () => ({
 }));
 
 import { readFile, writeFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import * as http from 'http';
 import type { IncomingMessage, ClientRequest } from 'http';
@@ -55,6 +55,7 @@ const SETTINGS_PATH = join('/fake/findings', 'settings.json');
 const mockReadFile = readFile as jest.MockedFunction<typeof readFile>;
 const mockWriteFile = writeFile as jest.MockedFunction<typeof writeFile>;
 const mockExistsSync = existsSync as jest.MockedFunction<typeof existsSync>;
+const mockReaddirSync = readdirSync as jest.MockedFunction<typeof readdirSync>;
 
 describe('SettingsService', () => {
   let service: SettingsService;
@@ -65,7 +66,9 @@ describe('SettingsService', () => {
   });
 
   describe('get', () => {
-    it('returns built-in defaults when no settings file exists', async () => {
+    // A fresh install must not scan anything it was not told to - in
+    // particular not the Juice Shop demo this project was developed against.
+    it('returns empty scan targets by default, so a fresh install scans nothing it was not told to', async () => {
       mockExistsSync.mockReturnValue(false);
       const settings = await service.get();
       expect(settings).toEqual({
@@ -73,14 +76,44 @@ describe('SettingsService', () => {
         checks: { ec2: true, sg: true, s3: true, iam: true },
         scanIntervalMinutes: 30,
         pipeline: {
-          sourceDir: '/target/juice-shop',
-          iacDir: '/workspace/infra',
-          targetImage: 'bkimminich/juice-shop:latest',
-          sonarProjectKey: 'threatweave-demo',
+          sourceDir: '',
+          iacDir: '',
+          targetImage: '',
+          sonarProjectKey: '',
           runAwsMonitor: true,
           failOnCritical: false,
         },
       });
+    });
+
+    it('takes default scan targets from SCAN_* environment variables when set', async () => {
+      const saved = { ...process.env };
+      Object.assign(process.env, {
+        SCAN_SOURCE_DIR: '/target', SCAN_IAC_DIR: '/target/infra',
+        SCAN_IMAGE: 'me/app:1.0', SCAN_SONAR_KEY: 'my-app',
+      });
+      try {
+        mockExistsSync.mockReturnValue(false);
+        const { pipeline } = await service.get();
+        expect(pipeline).toEqual(expect.objectContaining({
+          sourceDir: '/target', iacDir: '/target/infra', targetImage: 'me/app:1.0', sonarProjectKey: 'my-app',
+        }));
+      } finally {
+        process.env = saved;
+      }
+    });
+
+    it('keeps a saved choice over the environment defaults', async () => {
+      const saved = { ...process.env };
+      process.env.SCAN_SOURCE_DIR = '/target';
+      try {
+        mockExistsSync.mockReturnValue(true);
+        mockReadFile.mockResolvedValue(JSON.stringify({ pipeline: { sourceDir: '/target/juice-shop' } }) as never);
+        const { pipeline } = await service.get();
+        expect(pipeline.sourceDir).toBe('/target/juice-shop');
+      } finally {
+        process.env = saved;
+      }
     });
 
     it('merges an older settings file missing the pipeline block entirely', async () => {
@@ -89,8 +122,9 @@ describe('SettingsService', () => {
       mockReadFile.mockResolvedValue(JSON.stringify({ awsRegion: 'eu-west-1' }) as never);
 
       const settings = await service.get();
-      expect(settings.pipeline.sourceDir).toBe('/target/juice-shop');
-      expect(settings.pipeline.targetImage).toBe('bkimminich/juice-shop:latest');
+      expect(settings.pipeline.sourceDir).toBe('');
+      expect(settings.pipeline.targetImage).toBe('');
+      expect(settings.pipeline.runAwsMonitor).toBe(true);
     });
 
     it('merges a saved settings file over the defaults', async () => {
@@ -204,6 +238,39 @@ describe('SettingsService', () => {
   });
 
   describe('detectTarget', () => {
+    beforeEach(() => {
+      // A project is mounted unless a test says otherwise.
+      mockReaddirSync.mockImplementation(((dir: string) => (dir === '/fake/target' ? ['src'] : [])) as never);
+    });
+
+    it('suggests nothing when no project is mounted at /target', async () => {
+      mockExistsSync.mockReturnValue(false);
+      mockReaddirSync.mockReturnValue([] as never);
+
+      const result = await service.detectTarget();
+
+      expect(result.sourceDir).toBe('');
+      expect(result.iacDir).toBeUndefined();
+    });
+    it('suggests an infra/ folder holding Terraform files for Checkov', async () => {
+      mockExistsSync.mockReturnValue(false);
+      mockReaddirSync.mockImplementation(((dir: string) =>
+        dir === join('/fake/target', 'infra') ? ['main.tf', 'README.md'] : dir === '/fake/target' ? ['infra'] : []) as never);
+
+      const result = await service.detectTarget();
+
+      expect(result.iacDir).toBe(join('/fake/target', 'infra'));
+    });
+
+    it('suggests no IaC folder when the project has no Terraform', async () => {
+      mockExistsSync.mockReturnValue(false);
+      mockReaddirSync.mockImplementation(((dir: string) => (dir === '/fake/target' ? ['src'] : [])) as never);
+
+      const result = await service.detectTarget();
+
+      expect(result.iacDir).toBeUndefined();
+    });
+
     it('suggests /target itself when there is no nested juice-shop demo folder', async () => {
       mockExistsSync.mockReturnValue(false);
 

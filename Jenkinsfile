@@ -92,8 +92,18 @@ def runScanner(String name, String expectedReport, Closure body) {
             returnStdout: true,
         ).trim() as Integer
 
+        // A scanner that genuinely found nothing writes an empty JSON list or
+        // object - a real result, not the broken-mount symptom the size check
+        // below exists to catch.
+        def emptyResult = size > 0 && size <= 32 && sh(
+            script: "tr -d ' \n\r\t' < '${expectedReport}'",
+            returnStdout: true,
+        ).trim() in ['[]', '{}', 'null']
+
         if (size > 32) {
             scanStatus[name] = "ok (${size} bytes)"
+        } else if (emptyResult) {
+            scanStatus[name] = 'ok (no findings)'
         } else {
             scanStatus[name] = 'no report produced'
             echo "WARNING: ${name} exited cleanly but wrote no usable report to ${expectedReport}."
@@ -167,6 +177,20 @@ def sonarPendingMarker() { "${FINDINGS_DIR}/.sonar-pending.json" }
  * numbers a little longer than the fast scanners' - see checkPendingSonarScan. */
 def sonarLastGood() { "${FINDINGS_DIR}/sonarqube-last-good.json" }
 
+/** True when a source tree to scan has been configured. Empty means GitLeaks
+ * and SonarQube are skipped, not pointed at some default project. */
+def hasSourceDir() { params.SOURCE_DIR?.trim() as boolean }
+
+/** SonarQube project key: the configured one, else derived from the source
+ * folder name (SonarQube only accepts letters, digits and - _ . :). */
+def sonarKey() {
+    def key = params.SONAR_PROJECT_KEY?.trim()
+    if (key) return key
+    def parts = (params.SOURCE_DIR ?: '').tokenize('/')
+    def name = parts ? parts[-1] : 'project'
+    return name.replaceAll('[^A-Za-z0-9._:-]', '-')
+}
+
 /**
  * SonarQube's own analysis takes minutes no matter the CPU budget. Blocking
  * a run on it inline as an ordinary sequential stage would make the whole
@@ -196,6 +220,13 @@ def checkPendingSonarScan() {
     // cycle still has real (if slightly older) SAST data to correlate
     // against, rather than the engine seeing no SonarQube report at all.
     def hasLastGood = sh(script: "[ -f ${sonarLastGood()} ] && echo yes || echo no", returnStdout: true).trim()
+    // Never seed one project's SAST results into another project's run: the
+    // last-good report records which project key produced it.
+    def lastGoodKey = sh(script: "cat ${sonarLastGood()}.key 2>/dev/null || true", returnStdout: true).trim()
+    if (hasLastGood == 'yes' && lastGoodKey && lastGoodKey != sonarKey()) {
+        echo "Last good SonarQube report belongs to '${lastGoodKey}', not '${sonarKey()}' - not carrying it over."
+        hasLastGood = 'no'
+    }
     if (hasLastGood == 'yes') {
         sh "cp ${sonarLastGood()} ${INPUT_DIR}/sonarqube-report.json"
         scanStatus['SAST - SonarQube'] = 'ok (carried over from an earlier scan)'
@@ -311,7 +342,7 @@ def checkPendingSonarScan() {
     // out too small/missing (runScanner's own check) must not overwrite a
     // real earlier one.
     if ((scanStatus['SAST - SonarQube'] ?: '').startsWith('ok')) {
-        sh "cp ${INPUT_DIR}/sonarqube-report.json ${sonarLastGood()}"
+        sh "cp ${INPUT_DIR}/sonarqube-report.json ${sonarLastGood()} && echo '${pending.project_key}' > ${sonarLastGood()}.key"
     }
     sh "docker rm -f ${container} 2>/dev/null || true"
     sh "rm -f ${sonarPendingMarker()}"
@@ -339,7 +370,7 @@ def kickOffSonarScan() {
           -e SONAR_HOST_URL \
           -e SONAR_TOKEN \
           sonarsource/sonar-scanner-cli:latest \
-          -Dsonar.projectKey=${params.SONAR_PROJECT_KEY} \
+          -Dsonar.projectKey=${sonarKey()} \
           -Dsonar.sources=/usr/src \
           -Dsonar.scm.disabled=true \
           -Dsonar.working.directory=/tmp/.scannerwork \
@@ -348,7 +379,7 @@ def kickOffSonarScan() {
     writeJSON file: sonarPendingMarker(), json: [
         container       : container,
         run_id          : "build-${BUILD_NUMBER}",
-        project_key     : params.SONAR_PROJECT_KEY,
+        project_key     : sonarKey(),
         started_at_epoch_ms: System.currentTimeMillis(),
     ]
     echo "Launched async SonarQube scan (container ${container}, cpus=4) - a later run will pick up its results."
@@ -411,7 +442,7 @@ pipeline {
                     hostInputDir = toHostPath(INPUT_DIR)
                     echo "Container workspace : ${WORKSPACE_DIR}"
                     echo "Host workspace      : ${env.HOST_WORKSPACE}"
-                    echo "Scan target         : ${params.SOURCE_DIR}"
+                    echo "Scan target         : ${hasSourceDir() ? params.SOURCE_DIR : '(not configured - set it in the dashboard Settings)'}"
                     echo "Host target path    : ${hostTargetPath()}"
 
                     sh "mkdir -p ${INPUT_DIR}"
@@ -454,7 +485,14 @@ pipeline {
                     def isAutoTriggered = currentBuild.getBuildCauses().any {
                         (it._class ?: '').contains('TimerTrigger')
                     }
-                    if (isAutoTriggered) {
+                    if (isAutoTriggered && !hasSourceDir()) {
+                        // Nothing to watch for new commits yet. Cloud checks run on
+                        // the dashboard's own schedule, so skipping here loses nothing.
+                        echo 'No source directory configured - skipping this automatic run.'
+                        skipRun = true
+                        currentBuild.result = 'NOT_BUILT'
+                        currentBuild.description = 'Skipped - no project configured yet'
+                    } else if (isAutoTriggered) {
                         def currentHead = sh(script: "git -C ${SOURCE_DIR} rev-parse HEAD 2>/dev/null || echo ''", returnStdout: true).trim()
                         def markerFile = "${FINDINGS_DIR}/.last-scanned-commit"
                         def lastScanned = sh(script: "cat ${markerFile} 2>/dev/null || echo ''", returnStdout: true).trim()
@@ -498,8 +536,13 @@ pipeline {
             when { expression { !skipRun } }
             steps {
                 script {
-                    checkPendingSonarScan()
-                    kickOffSonarScan()
+                    if (!hasSourceDir()) {
+                        echo 'SOURCE_DIR not set - skipping SAST.'
+                        scanStatus['SAST - SonarQube'] = 'skipped'
+                    } else {
+                        checkPendingSonarScan()
+                        kickOffSonarScan()
+                    }
                 }
             }
         }
@@ -535,50 +578,55 @@ pipeline {
                 script {
                     parallel(
                         'Secrets - GitLeaks': {
-                            runScanner('Secrets - GitLeaks', "${INPUT_DIR}/gitleaks-report.json") {
-                                // GitLeaks rescans the *entire* git history by default (minutes,
-                                // on a repo with meaningful commit count) - a commit already
-                                // scanned in a prior run never needs scanning again, so this
-                                // only asks it to look at commits since the last run
-                                // (`--log-opts`) once a marker from a previous run exists.
-                                //
-                                // Doing that naively would make the report narrower each run -
-                                // a secret from an old, unremediated commit would silently drop
-                                // out just because that commit wasn't rescanned. gitleaks_merge.py
-                                // folds each run's (possibly incremental) findings into a
-                                // persisted cumulative store, so the report handed to the engine
-                                // always reflects everything found so far, not just what changed.
-                                sh """
-                                    mkdir -p ${GITLEAKS_STATE_DIR}
-                                    LAST_COMMIT=\$(cat ${GITLEAKS_STATE_DIR}/last-commit.txt 2>/dev/null || echo '')
-                                    LOG_OPTS=""
-                                    if [ -n "\$LAST_COMMIT" ] && \
-                                       git -C ${SOURCE_DIR} cat-file -e "\$LAST_COMMIT" 2>/dev/null && \
-                                       git -C ${SOURCE_DIR} merge-base --is-ancestor "\$LAST_COMMIT" HEAD 2>/dev/null; then
-                                        LOG_OPTS="--log-opts=\$LAST_COMMIT..HEAD"
-                                        echo "GitLeaks: incremental scan since \$LAST_COMMIT"
-                                    else
-                                        echo "GitLeaks: no usable marker - scanning full history"
-                                    fi
+                            if (!hasSourceDir()) {
+                                echo 'SOURCE_DIR not set - skipping secret scan stage.'
+                                scanStatus['Secrets - GitLeaks'] = 'skipped'
+                            } else {
+                                runScanner('Secrets - GitLeaks', "${INPUT_DIR}/gitleaks-report.json") {
+                                    // GitLeaks rescans the *entire* git history by default (minutes,
+                                    // on a repo with meaningful commit count) - a commit already
+                                    // scanned in a prior run never needs scanning again, so this
+                                    // only asks it to look at commits since the last run
+                                    // (`--log-opts`) once a marker from a previous run exists.
+                                    //
+                                    // Doing that naively would make the report narrower each run -
+                                    // a secret from an old, unremediated commit would silently drop
+                                    // out just because that commit wasn't rescanned. gitleaks_merge.py
+                                    // folds each run's (possibly incremental) findings into a
+                                    // persisted cumulative store, so the report handed to the engine
+                                    // always reflects everything found so far, not just what changed.
+                                    sh """
+                                        mkdir -p ${GITLEAKS_STATE_DIR}
+                                        LAST_COMMIT=\$(cat ${GITLEAKS_STATE_DIR}/last-commit.txt 2>/dev/null || echo '')
+                                        LOG_OPTS=""
+                                        if [ -n "\$LAST_COMMIT" ] && \
+                                           git -C ${SOURCE_DIR} cat-file -e "\$LAST_COMMIT" 2>/dev/null && \
+                                           git -C ${SOURCE_DIR} merge-base --is-ancestor "\$LAST_COMMIT" HEAD 2>/dev/null; then
+                                            LOG_OPTS="--log-opts=\$LAST_COMMIT..HEAD"
+                                            echo "GitLeaks: incremental scan since \$LAST_COMMIT"
+                                        else
+                                            echo "GitLeaks: no usable marker - scanning full history"
+                                        fi
 
-                                    docker run --rm --cpus="1" \
-                                      -v "${toHostPath(params.SOURCE_DIR)}:/repo" \
-                                      -v "${hostInputDir}:/out" \
-                                      zricethezav/gitleaks:latest detect \
-                                        --source /repo \
-                                        --report-format json \
-                                        --report-path /out/gitleaks-new.json \
-                                        --no-banner --exit-code 0 \
-                                        \$LOG_OPTS
+                                        docker run --rm --cpus="1" \
+                                          -v "${toHostPath(params.SOURCE_DIR)}:/repo" \
+                                          -v "${hostInputDir}:/out" \
+                                          zricethezav/gitleaks:latest detect \
+                                            --source /repo \
+                                            --report-format json \
+                                            --report-path /out/gitleaks-new.json \
+                                            --no-banner --exit-code 0 \
+                                            \$LOG_OPTS
 
-                                    python3 ${ENGINE_DIR}/gitleaks_merge.py \
-                                      --previous ${GITLEAKS_STATE_DIR}/cumulative.json \
-                                      --new ${INPUT_DIR}/gitleaks-new.json \
-                                      --output ${INPUT_DIR}/gitleaks-report.json
-                                    cp ${INPUT_DIR}/gitleaks-report.json ${GITLEAKS_STATE_DIR}/cumulative.json
+                                        python3 ${ENGINE_DIR}/gitleaks_merge.py \
+                                          --previous ${GITLEAKS_STATE_DIR}/cumulative.json \
+                                          --new ${INPUT_DIR}/gitleaks-new.json \
+                                          --output ${INPUT_DIR}/gitleaks-report.json
+                                        cp ${INPUT_DIR}/gitleaks-report.json ${GITLEAKS_STATE_DIR}/cumulative.json
 
-                                    git -C ${SOURCE_DIR} rev-parse HEAD > ${GITLEAKS_STATE_DIR}/last-commit.txt 2>/dev/null || true
-                                """
+                                        git -C ${SOURCE_DIR} rev-parse HEAD > ${GITLEAKS_STATE_DIR}/last-commit.txt 2>/dev/null || true
+                                    """
+                                }
                             }
                         },
                         'Container - Trivy': {
@@ -612,19 +660,24 @@ pipeline {
                             }
                         },
                         'IaC - Checkov': {
-                            runScanner('IaC - Checkov', "${INPUT_DIR}/checkov-report.json") {
-                                // Checkov exits non-zero when checks fail, which is the
-                                // expected case here, so the exit code is ignored.
-                                sh """
-                                    docker run --rm --cpus="0.5" \
-                                      -v "${toHostPath(params.IAC_DIR)}:/tf" \
-                                      -v "${hostInputDir}:/out" \
-                                      bridgecrew/checkov:latest \
-                                        -d /tf -o json --compact --quiet \
-                                        --output-file-path /out || true
-                                    [ -f ${INPUT_DIR}/results_json.json ] && \
-                                      mv ${INPUT_DIR}/results_json.json ${INPUT_DIR}/checkov-report.json || true
-                                """
+                            if (!params.IAC_DIR?.trim()) {
+                                echo 'IAC_DIR not set - skipping infrastructure-as-code scan stage.'
+                                scanStatus['IaC - Checkov'] = 'skipped'
+                            } else {
+                                runScanner('IaC - Checkov', "${INPUT_DIR}/checkov-report.json") {
+                                    // Checkov exits non-zero when checks fail, which is the
+                                    // expected case here, so the exit code is ignored.
+                                    sh """
+                                        docker run --rm --cpus="0.5" \
+                                          -v "${toHostPath(params.IAC_DIR)}:/tf" \
+                                          -v "${hostInputDir}:/out" \
+                                          bridgecrew/checkov:latest \
+                                            -d /tf -o json --compact --quiet \
+                                            --output-file-path /out || true
+                                        [ -f ${INPUT_DIR}/results_json.json ] && \
+                                          mv ${INPUT_DIR}/results_json.json ${INPUT_DIR}/checkov-report.json || true
+                                    """
+                                }
                             }
                         },
                     )
@@ -644,7 +697,9 @@ pipeline {
             when { expression { !skipRun } }
             steps {
                 script {
-                    checkPendingSonarScan()
+                    if (hasSourceDir()) {
+                        checkPendingSonarScan()
+                    }
                 }
             }
         }

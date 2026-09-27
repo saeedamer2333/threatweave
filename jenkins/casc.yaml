@@ -25,22 +25,24 @@ unclassified:
 jobs:
   - script: |
       pipelineJob('threatweave-pipeline') {
-        description('''DevSecOps pipeline: scans the demo target with SonarQube,
+        description('''DevSecOps pipeline: scans the configured project with SonarQube,
                        GitLeaks, Trivy and Checkov, then runs the AIOps engine
                        to deduplicate, score and correlate the findings.''')
         parameters {
-          stringParam('TARGET_IMAGE', 'bkimminich/juice-shop:latest',
-                      'Container image to scan with Trivy')
-          stringParam('SOURCE_DIR', '/target/juice-shop',
-                      '''Source tree to scan with GitLeaks and SonarQube.
-                         Paths under /target resolve to TARGET_PATH from .env;
-                         paths under /workspace resolve to ThreatWeave itself.''')
-          stringParam('IAC_DIR', '/workspace/infra',
-                      '''Infrastructure-as-code directory for Checkov. Defaults to
-                         ThreatWeave's own demo Terraform; point it at your own
-                         project (e.g. /target/infra) when scanning one.''')
-          stringParam('SONAR_PROJECT_KEY', 'threatweave-demo',
-                      'SonarQube project key for the SAST stage')
+          // Defaults come from the environment (SCAN_* in .env or `-e` on
+          // docker run) and are empty otherwise: a fresh install scans
+          // nothing it was not told to. An empty value skips that scanner.
+          stringParam('TARGET_IMAGE', '${SCAN_IMAGE:-}',
+                      'Container image to scan with Trivy. Empty skips Trivy.')
+          stringParam('SOURCE_DIR', '${SCAN_SOURCE_DIR:-}',
+                      '''Source tree to scan with GitLeaks and SonarQube, e.g. /target.
+                         Paths under /target resolve to TARGET_PATH on the host.
+                         Empty skips both, and automatic runs stay idle.''')
+          stringParam('IAC_DIR', '${SCAN_IAC_DIR:-}',
+                      '''Infrastructure-as-code directory for Checkov, e.g.
+                         /target/infra. Empty skips Checkov.''')
+          stringParam('SONAR_PROJECT_KEY', '${SCAN_SONAR_KEY:-}',
+                      'SonarQube project key. Empty derives one from the source folder name.')
           booleanParam('RUN_AWS_MONITOR', true,
                        'Include live AWS cloud governance checks')
           booleanParam('FAIL_ON_CRITICAL', false,

@@ -16,6 +16,8 @@ build/
 # ** so this also covers findings/scan-inputs/*.json - a real run's raw
 # scanner reports can contain a real AWS account ID and resource names.
 findings/**/*.json
+# Runtime marker naming the project a carried-over SonarQube report belongs to.
+findings/*.key
 !findings/.gitkeep
 !findings/scan-inputs/.gitkeep
 

@@ -302,7 +302,7 @@ only ever *reports* what Boto3 already resolved, matching the project's "no
 credentials in the product" posture described below.
 
 **Scanning your own project in this mode, without a clone.** Run it from the
-project's folder; on start the container reads its own mounts for the host paths
+project's root folder; on start the container reads its own mounts for the host paths
 and detects what to scan (source, Terraform/CloudFormation/CDK folders, project
 name - see `aiops_engine/target_detect.py`), labelled *Detected* in Settings:
 

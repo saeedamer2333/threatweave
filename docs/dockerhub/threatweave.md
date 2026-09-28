@@ -78,7 +78,7 @@ access block and default encryption, IAM `AdministratorAccess` and extra access 
 
 ## Scan your own project
 
-Run this from your project's folder. Nothing else to configure: on start, ThreatWeave
+Run this from your project's root folder (the one holding `.git`). Nothing else to configure: on start, ThreatWeave
 reads its own mounts to find the host paths, and looks inside your project for what to
 scan.
 
@@ -104,7 +104,8 @@ docker run -d --name threatweave `
   saeedalameri/threatweave:latest
 ```
 
-Open http://localhost:3000 and click **Run scan**.
+Open http://localhost:3000 and click **Run scan**. After that first scan, ThreatWeave checks
+for new commits every 5 minutes and rescans only when something changed.
 
 **What it detects** (shown in Settings → Pipeline target, each value labelled *Detected*):
 
@@ -131,6 +132,9 @@ Notes:
   GitLeaks reads the history, and the 5-minute automatic runs use it to skip unchanged code;
   without it, automatic runs are skipped and only **Run scan** scans.
 - **CDK:** run `cdk synth` first so `cdk.out` holds current templates.
+- **Scanner status:** the Overview shows each scanner as *ok*, *skipped* (not set, or turned
+  off), *failed* with the reason (e.g. image not found), or *carried over* when SonarQube's
+  results are reused from an earlier scan. A failed scanner never stops the others.
 - **Memory:** SonarQube needs about 3 GB; add `-e SONARQUBE_AUTOSTART=false` to skip it.
 - **Several projects:** one container per project, each with its own name, results folder
   and ports (e.g. `-p 3100:80 -p 8180:8080`).

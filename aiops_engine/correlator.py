@@ -45,6 +45,16 @@ _STEP_LABELS = {
 }
 
 
+def _aws_exposure_label(check: str | None) -> str:
+    """Name the live resource the AWS monitor found open, from its check id."""
+    check = check or ""
+    if check.startswith("s3_"):
+        return "bucket publicly accessible (AWS S3)"
+    if check.startswith("ec2_"):
+        return "instance has a public IP (AWS EC2)"
+    return "host publicly exposed (AWS security group)"
+
+
 def _step_order(source: str) -> int:
     order = list(_STEP_LABELS)
     return order.index(source) if source in order else len(order)
@@ -131,7 +141,7 @@ def _rule_b_exposed_asset(findings: list[Finding], exposure: Finding,
 
     total_cves = sum(max(m.merged_count, 1) for m in severe)
     runtime = exposure.source == "aws"
-    exposure_label = ("host publicly exposed (AWS security group)" if runtime
+    exposure_label = (_aws_exposure_label(exposure.rule_id) if runtime
                       else "exposure declared in infrastructure (Checkov)")
     sources = sorted({m.source for m in severe}, key=_step_order)
 

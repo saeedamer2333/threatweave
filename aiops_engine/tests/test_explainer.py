@@ -143,6 +143,32 @@ def test_cluster_rule_b_explanation_credits_checkov_when_declared_not_runtime():
     assert "declared in the infrastructure code" in result["why_it_matters"]
 
 
+def test_cluster_rule_b_with_only_code_findings_never_mentions_packages():
+    # A project with no container image (AccessHub): the path holds SonarQube
+    # findings only, so there is nothing to upgrade.
+    cluster = {
+        "internet_exposed": True, "severe_count": 3, "total_cves": 3,
+        "exposure_resource": "s3://bucket", "exposure_source": "aws", "cve_id": None,
+        "member_sources": ["sonarqube"],
+    }
+    result = explainer.explain_cluster(cluster, members=[])
+    text = " ".join(result.values())
+    assert "upgrade" not in text
+    assert "the code behind it" in result["why_it_matters"]
+    assert "fix the code findings" in result["recommended_action"]
+
+
+def test_cluster_rule_b_with_code_and_container_names_both_fixes():
+    cluster = {
+        "internet_exposed": True, "severe_count": 9, "total_cves": 20,
+        "exposure_resource": "aws_security_group.web", "exposure_source": "checkov",
+        "cve_id": "CVE-1", "member_sources": ["sonarqube", "trivy"],
+    }
+    result = explainer.explain_cluster(cluster, members=[])
+    assert "the code and software behind it" in result["why_it_matters"]
+    assert "upgrade the affected packages and fix the code findings" in result["recommended_action"]
+
+
 def test_cluster_rule_a_explanation_names_the_shared_cve():
     trivy_member = _f(source="trivy", affected_resource="Node.js / log4j-2.14.1")
     cluster = {"internet_exposed": False, "cve_id": "CVE-2021-44228"}

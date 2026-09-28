@@ -178,22 +178,43 @@ def explain_cluster(cluster: dict, members: list[Finding]) -> dict:
                     "The exposure is declared in the infrastructure code, so it will exist "
                     "once this configuration is applied")
         extra = f" covering {total} CVEs in total" if total > n else ""
+        # Wording follows what is actually in the path: package advice only
+        # when the container scanner contributed, code advice when the code
+        # scanner did - a project with no image must not be told to upgrade.
+        # A cluster that records no sources keeps the original container wording.
+        sources = (cluster.get("member_sources") or sorted({m.source for m in members})
+                   or ["trivy"])
+        has_container = "trivy" in sources
+        has_code = any(s in ("sonarqube", "gitleaks") for s in sources)
+        behind = ("the software behind it" if has_container and not has_code
+                  else "the code behind it" if has_code and not has_container
+                  else "the code and software behind it")
+        if has_container:
+            risk = ("Successful exploitation could mean remote code execution on a "
+                    "production-facing host, and from there access to data and credentials.")
+        else:
+            risk = ("Weaknesses in the code it runs, such as unsafe input handling or embedded "
+                    "credentials, could give access to data and credentials.")
+        if has_container and has_code:
+            then = f"Then upgrade the affected packages and fix the code findings, starting with {cve}."
+        elif has_container:
+            then = f"Then upgrade the affected packages, starting with {cve}."
+        else:
+            then = f"Then fix the code findings, starting with {cve}."
         return {
             "why_it_matters": (
-                f"{resource} is reachable from the public internet and the software behind it "
+                f"{resource} is reachable from the public internet and {behind} "
                 f"carries {n} severe vulnerabilities{extra}. {evidence}. Individually these are "
                 f"routine tickets in separate tools; together they form a single reachable "
                 f"attack surface, which is why this is ranked above any of its parts."
             ),
             "what_is_at_risk": (
-                "An attacker needs no foothold to begin - the vulnerable service is directly "
-                "reachable. Successful exploitation could mean remote code execution on a "
-                "production-facing host, and from there access to data and credentials."
+                f"An attacker needs no foothold to begin - the resource is directly reachable. {risk}"
             ),
             "recommended_action": (
                 f"Close the exposure first: restrict ingress on {resource} to trusted CIDR "
                 f"ranges. That single change removes the reachability for all {n} findings at "
-                f"once. Then upgrade the affected packages, starting with {cve}."
+                f"once. {then}"
             ),
         }
 

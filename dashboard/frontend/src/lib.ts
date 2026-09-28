@@ -223,3 +223,14 @@ export function filterFindings(findings: Finding[], { severity, source, query }:
       );
     });
 }
+
+/** Which box an attack-path step is drawn as. Exposure is checked first, so
+ * "exposure declared in infrastructure code" is never read as a code step. */
+export function attackStage(text: string): { kind: string; stage: string } {
+  const t = text.toLowerCase();
+  if (t.includes('exposed') || t.includes('exposure') || t.includes('internet')) return { kind: 'cloud', stage: 'Cloud Exposure' };
+  if (t.includes('container') || t.includes('trivy') || t.includes('image')) return { kind: 'container', stage: 'Container' };
+  if (t.includes('code') || t.includes('sonar') || t.includes('gitleaks')) return { kind: 'code', stage: 'Source Code' };
+  if (t.includes('aws')) return { kind: 'cloud', stage: 'Cloud Exposure' };
+  return { kind: 'dot', stage: 'Finding' };
+}

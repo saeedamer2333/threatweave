@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type { AiopsOutput, Finding, Cluster, HistoryPoint, Suppression, SourceStatus } from './types';
 import { api, ApiError, type PathCheck, type PipelineStatus, type NewSuppression, type AwsStatus, type AppSettings, type DetectedTarget, type SonarQubeStatus, type AsyncSonarScanStatus } from './api';
-import { healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge, READONLY_POLICY_JSON, isAwsMonitorRunning, originLabel, iacKindLabel } from './lib';
+import { healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge, READONLY_POLICY_JSON, isAwsMonitorRunning, originLabel, iacKindLabel, attackStage } from './lib';
 import './App.css';
 
 type View = 'overview' | 'findings' | 'clusters' | 'history' | 'settings';
@@ -1637,13 +1637,7 @@ const STAGE_ICONS: Record<string, ReactNode> = {
 
 function AttackChain({ path }: { path: string }) {
   const steps = path.split('->').map((s) => s.trim());
-  const stageOf = (text: string): { kind: string; stage: string } => {
-    const t = text.toLowerCase();
-    if (t.includes('code') || t.includes('sonar')) return { kind: 'code', stage: 'Source Code' };
-    if (t.includes('container') || t.includes('trivy') || t.includes('image')) return { kind: 'container', stage: 'Container' };
-    if (t.includes('internet') || t.includes('exposed') || t.includes('aws') || t.includes('sg')) return { kind: 'cloud', stage: 'Cloud Exposure' };
-    return { kind: 'dot', stage: 'Finding' };
-  };
+  const stageOf = attackStage;
   return (
     <div className="chain">
       {steps.map((s, i) => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isAwsMonitorRunning, originLabel, iacKindLabel, healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge, READONLY_POLICY, READONLY_POLICY_JSON } from './lib';
+import { isAwsMonitorRunning, originLabel, iacKindLabel, healthLabel, dirGlob, filterFindings, formatElapsed, describeAwsAuthMethod, evidenceText, formatScoreValue, confidenceExplanation, isRealDescription, describeFindingAge, READONLY_POLICY, READONLY_POLICY_JSON, attackStage } from './lib';
 import type { Finding } from './types';
 
 function finding(overrides: Partial<Finding> = {}): Finding {
@@ -356,5 +356,18 @@ describe('iacKindLabel', () => {
     expect(iacKindLabel('cdk', 3)).toBe('3 CDK templates');
     expect(iacKindLabel('terraform', 1)).toBe('1 Terraform file');
     expect(iacKindLabel('cloudformation', 2)).toBe('2 CloudFormation templates');
+  });
+});
+
+describe('attackStage', () => {
+  it('draws each engine step as the right kind of box', () => {
+    expect(attackStage('Vulnerable code (SonarQube)').stage).toBe('Source Code');
+    expect(attackStage('Secret committed in code (GitLeaks)').stage).toBe('Source Code');
+    expect(attackStage('Vulnerable dependency in deployed container (Trivy)').stage).toBe('Container');
+    expect(attackStage('host publicly exposed (AWS security group)').stage).toBe('Cloud Exposure');
+  });
+
+  it('never reads an infrastructure-code exposure as a source-code step', () => {
+    expect(attackStage('exposure declared in infrastructure code (Checkov)').stage).toBe('Cloud Exposure');
   });
 });

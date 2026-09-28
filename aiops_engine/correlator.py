@@ -36,6 +36,19 @@ _EXPOSURE_SOURCES = ("aws", "checkov")
 # How many contributing vulnerabilities to name inside an exposure cluster.
 _MAX_MEMBERS = 8
 
+# The step an attack path shows for each tool found in it, in the order the
+# chain is drawn: code, then the built container, then (last) the exposure.
+_STEP_LABELS = {
+    "sonarqube": "Vulnerable code (SonarQube)",
+    "gitleaks": "Secret committed in code (GitLeaks)",
+    "trivy": "Vulnerable dependency in deployed container (Trivy)",
+}
+
+
+def _step_order(source: str) -> int:
+    order = list(_STEP_LABELS)
+    return order.index(source) if source in order else len(order)
+
 
 def _exposure_points(findings: list[Finding]) -> list[Finding]:
     """One evidence finding per distinct exposed resource, strongest first.
@@ -119,14 +132,18 @@ def _rule_b_exposed_asset(findings: list[Finding], exposure: Finding,
     total_cves = sum(max(m.merged_count, 1) for m in severe)
     runtime = exposure.source == "aws"
     exposure_label = ("host publicly exposed (AWS security group)" if runtime
-                      else "exposure declared in infrastructure code (Checkov)")
+                      else "exposure declared in infrastructure (Checkov)")
+    sources = sorted({m.source for m in severe}, key=_step_order)
 
     return [{
         "cluster_id": cid,
         "title": f"Internet-exposed asset running {len(severe)} severe vulnerabilities",
         "risk_score": max([exposure.risk_score] + [m.risk_score for m in members]),
-        "attack_path": (f"Vulnerable dependency in deployed container (Trivy) -> "
-                        f"{exposure_label}"),
+        # One step per tool actually present, then the exposure - a project
+        # with no container image must not be shown a Trivy step.
+        "attack_path": " -> ".join([_STEP_LABELS.get(s, f"Severe finding ({s})") for s in sources]
+                                   + [exposure_label]),
+        "member_sources": sources,
         "finding_ids": [exposure.id] + [m.id for m in members],
         "cve_id": members[0].cve_id,
         "internet_exposed": True,

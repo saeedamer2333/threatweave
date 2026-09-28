@@ -72,6 +72,33 @@ def test_rule_b_fires_when_exposure_and_severe_vulnerabilities_coexist():
     assert exposure.id in c["finding_ids"]
 
 
+def test_rule_b_steps_show_only_the_tools_actually_in_the_path():
+    # No container image scanned: the path must not claim a Trivy step.
+    exposure = _f(source="aws", type="EXPOSURE", internet_facing=True, risk_score=51,
+                  affected_resource="s3://bucket")
+    code = _f(source="sonarqube", severity="CRITICAL", risk_score=56)
+
+    c = correlator.correlate([exposure, code])[0]
+
+    assert c["attack_path"] == "Vulnerable code (SonarQube) -> host publicly exposed (AWS security group)"
+    assert c["member_sources"] == ["sonarqube"]
+
+
+def test_rule_b_steps_run_code_then_container_then_exposure():
+    exposure = _f(source="checkov", type="MISCONFIGURATION", internet_facing=True, risk_score=58,
+                  affected_resource="aws_security_group.web")
+    container = _f(source="trivy", cve_id="CVE-1", severity="HIGH", risk_score=60)
+    code = _f(source="sonarqube", severity="HIGH", risk_score=62)
+
+    c = correlator.correlate([exposure, container, code])[0]
+
+    assert c["attack_path"].split(" -> ") == [
+        "Vulnerable code (SonarQube)",
+        "Vulnerable dependency in deployed container (Trivy)",
+        "exposure declared in infrastructure (Checkov)",
+    ]
+
+
 def test_rule_b_does_not_fire_without_exposure_evidence():
     severe = _f(cve_id="CVE-1", severity="CRITICAL")
     clusters = correlator.correlate([severe])

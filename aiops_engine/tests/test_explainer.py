@@ -39,6 +39,23 @@ def test_code_vulnerability_without_cve_matches_sql_injection_keyword():
     assert "parameterised queries" in text
 
 
+def test_code_injection_is_not_labelled_as_sql_injection():
+    # The real SonarQube title from the Juice Shop run: "injection" alone
+    # used to pick the SQL template and advise parameterised queries.
+    f = _f(cve_id=None, source="sonarqube",
+           title="Make sure that this dynamic injection or execution of code is safe.")
+    result = explainer.explain_finding_structured(f)
+    assert result["kind"] == "Code Injection"
+    assert "database" not in result["narrative"]
+    assert "eval" in result["fix"]
+
+
+def test_injection_without_a_known_kind_gets_the_generic_injection_template():
+    f = _f(cve_id=None, title="LDAP injection possible", description="")
+    result = explainer.explain_finding_structured(f)
+    assert result["kind"] == "Injection"
+
+
 def test_code_vulnerability_without_cve_falls_back_to_generic_template():
     f = _f(cve_id=None, title="Obscure finding with no keyword match", description="")
     text = explainer.explain_finding(f)

@@ -17,9 +17,15 @@ from schema import Finding
 # `why`, the fuller sentence explaining the mechanism.
 # ---------------------------------------------------------------------------
 _CODE_PATTERNS: list[tuple[tuple[str, ...], str, str, str]] = [
-    (("sql", "injection"), "SQL Injection",
+    # "sql" is required: the word "injection" alone also covers code, command
+    # and template injection, which need a different explanation and fix.
+    (("sql",), "SQL Injection",
      "user input reaches a database query without sanitisation, allowing SQL injection",
      "Use parameterised queries or an ORM so input can never alter query structure."),
+    (("code injection", "execution of code", "dynamic injection", "dynamically executed", "eval("),
+     "Code Injection",
+     "code is built or executed dynamically, so input that reaches it could run as code",
+     "Avoid eval and dynamic code execution; pass input as data and validate it against an allow-list."),
     (("xss", "cross-site", "cross site"), "Cross-Site Scripting (XSS)",
      "unescaped user input is rendered in the page, allowing cross-site scripting (XSS)",
      "Escape or encode all user-controlled output and apply a Content-Security-Policy."),
@@ -38,6 +44,10 @@ _CODE_PATTERNS: list[tuple[tuple[str, ...], str, str, str]] = [
     (("hardcoded", "hard-coded"), "Hardcoded Credential",
      "a credential is embedded directly in source code",
      "Move the value to a secret manager and rotate the exposed credential."),
+    # Last, so any more specific injection template above wins.
+    (("injection",), "Injection",
+     "input reaches an interpreter without sanitisation, allowing injection",
+     "Validate input and use APIs that keep data separate from code or queries."),
 ]
 
 # Secret rule id / description -> (kind, what the secret unlocks)
